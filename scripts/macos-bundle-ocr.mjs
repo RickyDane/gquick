@@ -12,8 +12,6 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "
 const bundleRoot = path.join(repoRoot, "src-tauri", "macos-bundle");
 const frameworksDir = path.join(bundleRoot, "Frameworks");
 const tessdataDir = path.join(bundleRoot, "tessdata");
-const tesseractLib = "/opt/homebrew/opt/tesseract/lib/libtesseract.5.dylib";
-const trainedData = "/opt/homebrew/opt/tesseract/share/tessdata/eng.traineddata";
 
 fs.rmSync(bundleRoot, { recursive: true, force: true });
 fs.mkdirSync(frameworksDir, { recursive: true });
@@ -23,6 +21,31 @@ const seen = new Map();
 
 function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: "utf8" }).trim();
+}
+
+function resolveTesseractPaths() {
+  const candidates = [];
+
+  try {
+    const prefix = run("brew", ["--prefix", "tesseract"]);
+    if (prefix) {
+      candidates.push(prefix);
+    }
+  } catch {
+    // Fall back to common Homebrew locations below.
+  }
+
+  candidates.push("/opt/homebrew/opt/tesseract", "/usr/local/opt/tesseract");
+
+  for (const prefix of candidates) {
+    const libPath = path.join(prefix, "lib", "libtesseract.5.dylib");
+    const dataPath = path.join(prefix, "share", "tessdata", "eng.traineddata");
+    if (fs.existsSync(libPath) && fs.existsSync(dataPath)) {
+      return { tesseractLib: libPath, trainedData: dataPath };
+    }
+  }
+
+  throw new Error("Could not locate Homebrew Tesseract library and tessdata.");
 }
 
 function parseOtoolDeps(file) {
@@ -70,12 +93,14 @@ function collectLibraries(file) {
     if (!resolved) {
       continue;
     }
-    if (!resolved.startsWith("/opt/homebrew/")) {
+    if (!resolved.startsWith("/opt/homebrew/") && !resolved.startsWith("/usr/local/")) {
       continue;
     }
     collectLibraries(resolved);
   }
 }
+
+const { tesseractLib, trainedData } = resolveTesseractPaths();
 
 collectLibraries(tesseractLib);
 fs.copyFileSync(trainedData, path.join(tessdataDir, "eng.traineddata"));

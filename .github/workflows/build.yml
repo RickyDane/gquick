@@ -93,6 +93,7 @@ jobs:
         if: startsWith(matrix.os_name, 'macos')
         run: |
           brew install tesseract
+          mkdir -p src-tauri/macos-bundle/Frameworks src-tauri/macos-bundle/tessdata
 
       - name: Install Windows dependencies
         if: matrix.os_name == 'windows'

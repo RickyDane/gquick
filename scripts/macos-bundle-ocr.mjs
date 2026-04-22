@@ -127,9 +127,8 @@ const executableCandidates = [
   ...fs
     .readdirSync(path.join(repoRoot, "src-tauri", "target"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(repoRoot, "src-tauri", "target", entry.name, "release", "tauri-app"))
-    .filter((candidate) => fs.existsSync(candidate)),
-];
+    .map((entry) => path.join(repoRoot, "src-tauri", "target", entry.name, "release", "tauri-app")),
+].filter((candidate) => fs.existsSync(candidate));
 
 const executablePaths = executableCandidates.filter((candidate, index, all) => all.indexOf(candidate) === index);
 for (const executable of executablePaths) {

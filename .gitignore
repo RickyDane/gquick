@@ -47,6 +47,7 @@ dist-ssr
 # Tauri specific
 src-tauri/target/
 src-tauri/gen/schemas/
+src-tauri/macos-bundle/
 
 # Test coverage
 coverage/

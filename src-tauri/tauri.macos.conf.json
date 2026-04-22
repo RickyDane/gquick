@@ -1,0 +1,12 @@
+{
+  "build": {
+    "beforeBundleCommand": "node scripts/macos-bundle-ocr.mjs"
+  },
+  "bundle": {
+    "targets": "app",
+    "resources": {
+      "macos-bundle/Frameworks/": "Frameworks/",
+      "macos-bundle/tessdata/": "tessdata/"
+    }
+  }
+}

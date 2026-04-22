@@ -259,6 +259,57 @@ fn parse_time_filter(query: &str) -> Option<u64> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
+    app.path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("tessdata"))
+        .filter(|dir| dir.exists())
+        .map(|dir| dir.to_string_lossy().to_string())
+}
+
+fn run_ocr(app: &tauri::AppHandle, path: &str) -> String {
+    let data_path = {
+        #[cfg(target_os = "macos")]
+        {
+            tesseract_data_path(app)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = app;
+            None
+        }
+    };
+
+    match Tesseract::new(data_path.as_deref(), Some("eng")) {
+        Ok(tess) => match tess.set_image(path) {
+            Ok(mut tess) => match tess.get_text() {
+                Ok(text) => {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        "No text found in image".to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                }
+                Err(e) => {
+                    eprintln!("OCR text extraction failed: {}", e);
+                    "OCR unavailable: failed to extract text from image.".to_string()
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to load image for OCR: {}", e);
+                "OCR unavailable: failed to load captured image.".to_string()
+            }
+        },
+        Err(e) => {
+            eprintln!("Tesseract initialization failed: {}", e);
+            "OCR unavailable: Tesseract not installed or failed to initialize.".to_string()
+        }
+    }
+}
+
 fn build_file_index() -> Vec<FileInfo> {
     let mut files = Vec::with_capacity(10000);
     
@@ -771,37 +822,7 @@ fn capture_region(window: tauri::Window, x: i32, y: i32, width: u32, height: u32
         if mode == "screenshot" {
             let _ = app.opener().open_path(&path, None::<&str>);
         } else if mode == "ocr" {
-            // Run Tesseract OCR on the captured image
-            let ocr_text = match Tesseract::new(None, Some("eng")) {
-                Ok(tess) => {
-                    match tess.set_image(&path) {
-                        Ok(mut tess) => {
-                            match tess.get_text() {
-                                Ok(text) => {
-                                    let trimmed = text.trim();
-                                    if trimmed.is_empty() {
-                                        "No text found in image".to_string()
-                                    } else {
-                                        trimmed.to_string()
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("OCR text extraction failed: {}", e);
-                                    "OCR unavailable: failed to extract text from image.".to_string()
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to load image for OCR: {}", e);
-                            "OCR unavailable: failed to load captured image.".to_string()
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Tesseract initialization failed: {}", e);
-                    "OCR unavailable: Tesseract not installed or failed to initialize.".to_string()
-                }
-            };
+            let ocr_text = run_ocr(&app, &path);
             
             // Copy extracted text to clipboard
             let _ = app.clipboard().write_text(ocr_text.clone());

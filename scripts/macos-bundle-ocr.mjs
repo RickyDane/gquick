@@ -23,6 +23,10 @@ function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: "utf8" }).trim();
 }
 
+function codesign(file) {
+  run("codesign", ["--force", "--sign", "-", "--timestamp=none", file]);
+}
+
 function resolveTesseractPaths() {
   const candidates = [];
 
@@ -120,6 +124,7 @@ for (const [source, destination] of seen) {
       destination,
     ]);
   }
+  codesign(destination);
 }
 
 const executableCandidates = [
@@ -145,4 +150,5 @@ for (const executable of executablePaths) {
       executable,
     ]);
   }
+  codesign(executable);
 }

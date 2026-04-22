@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Key, Eye, EyeOff, Loader2, Command } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import ShortcutRecorder from "./components/ShortcutRecorder";
 
 interface Model {
   id: string;
@@ -20,15 +21,6 @@ const PROVIDERS = [
   { id: "anthropic", name: "Anthropic Claude" },
 ];
 
-const SHORTCUT_OPTIONS = [
-  { value: "Alt+Space", label: "Alt + Space" },
-  { value: "CmdOrCtrl+Space", label: "Cmd/Ctrl + Space" },
-  { value: "Alt+Shift+Space", label: "Alt + Shift + Space" },
-  { value: "CmdOrCtrl+Shift+Space", label: "Cmd/Ctrl + Shift + Space" },
-  { value: "Alt+Enter", label: "Alt + Enter" },
-  { value: "CmdOrCtrl+Enter", label: "Cmd/Ctrl + Enter" },
-];
-
 export default function Settings({ onClose }: { onClose: () => void }) {
   const [apiKey, setApiKey] = useState("");
   const [apiProvider, setApiProvider] = useState("openai");
@@ -38,6 +30,8 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelError, setModelError] = useState("");
   const [mainShortcut, setMainShortcut] = useState("Alt+Space");
+  const [screenshotShortcut, setScreenshotShortcut] = useState("Alt+S");
+  const [ocrShortcut, setOcrShortcut] = useState("Alt+O");
 
   useEffect(() => {
     const savedKey = localStorage.getItem("api-key");
@@ -51,6 +45,12 @@ export default function Settings({ onClose }: { onClose: () => void }) {
 
     const savedShortcut = localStorage.getItem("main-shortcut");
     if (savedShortcut) setMainShortcut(savedShortcut);
+
+    const savedScreenshotShortcut = localStorage.getItem("screenshot-shortcut");
+    if (savedScreenshotShortcut) setScreenshotShortcut(savedScreenshotShortcut);
+
+    const savedOcrShortcut = localStorage.getItem("ocr-shortcut");
+    if (savedOcrShortcut) setOcrShortcut(savedOcrShortcut);
 
     // Load cached models if available
     const cachedModels = localStorage.getItem(`models-${savedProvider || "openai"}`);
@@ -128,7 +128,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         } else if (apiProvider === "anthropic") {
           fetchedModels = ANTHROPIC_MODELS;
         } else if (apiProvider === "kimi") {
-          const res = await fetch("https://api.moonshot.cn/v1/models", {
+          const res = await fetch("https://api.moonshot.ai/v1/models", {
             headers: { Authorization: `Bearer ${apiKey}` },
             signal: controller.signal,
           });
@@ -176,7 +176,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="flex flex-col min-h-[350px] p-6 text-zinc-200">
+    <div className="flex flex-col h-[420px] p-6 text-zinc-200">
       <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
         {/* Global Shortcut Configuration */}
         <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
@@ -188,10 +188,9 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">Open Window</span>
-            <select
+            <ShortcutRecorder
               value={mainShortcut}
-              onChange={async (e) => {
-                const value = e.target.value;
+              onChange={async (value) => {
                 setMainShortcut(value);
                 localStorage.setItem("main-shortcut", value);
                 try {
@@ -200,14 +199,45 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                   console.error("Failed to update shortcut:", err);
                 }
               }}
-              className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500/50 transition-all appearance-none cursor-pointer"
-            >
-              {SHORTCUT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
+            />
             <p className="text-[11px] text-zinc-500 ml-1">
               Shortcut to open/close the GQuick launcher window
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">Screenshot</span>
+            <ShortcutRecorder
+              value={screenshotShortcut}
+              onChange={async (value) => {
+                setScreenshotShortcut(value);
+                localStorage.setItem("screenshot-shortcut", value);
+                try {
+                  await invoke("update_screenshot_shortcut", { shortcut: value });
+                } catch (err) {
+                  console.error("Failed to update screenshot shortcut:", err);
+                }
+              }}
+            />
+            <p className="text-[11px] text-zinc-500 ml-1">
+              Shortcut to capture a screenshot of a selected region
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">OCR</span>
+            <ShortcutRecorder
+              value={ocrShortcut}
+              onChange={async (value) => {
+                setOcrShortcut(value);
+                localStorage.setItem("ocr-shortcut", value);
+                try {
+                  await invoke("update_ocr_shortcut", { shortcut: value });
+                } catch (err) {
+                  console.error("Failed to update OCR shortcut:", err);
+                }
+              }}
+            />
+            <p className="text-[11px] text-zinc-500 ml-1">
+              Shortcut to extract text from a selected region
             </p>
           </div>
         </div>

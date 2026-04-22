@@ -214,7 +214,7 @@ The Settings UI references these providers but no actual API integration exists:
 | OpenAI | `https://api.openai.com/v1` | API Key (Bearer) |
 | Google Gemini | `https://generativelanguage.googleapis.com` | API Key (query param) |
 | Anthropic Claude | `https://api.anthropic.com/v1` | API Key (x-api-key header) |
-| Kimi/Moonshot | `https://api.moonshot.cn/v1` | API Key (Bearer) |
+| Kimi/Moonshot | `https://api.moonshot.ai/v1` | API Key (Bearer) |
 
 ### Planned OAuth Flows
 

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -8,6 +9,7 @@ export default function Selector() {
   const [current, setCurrent] = useState<{ x: number; y: number } | null>(null);
   const [mode, setMode] = useState<string>("screenshot");
   const [isCapturing, setIsCapturing] = useState(false);
+  const selectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Ensure window is focused to catch keys
@@ -63,28 +65,39 @@ export default function Selector() {
       const height = Math.abs(start.y - current.y);
 
       if (width > 2 && height > 2) {
-        setIsCapturing(true);
-        
-        // Send coordinates to Rust
-        // The Rust backend will now handle hiding the window and the delay
-        invoke("capture_region", { 
-          x: Math.floor(x), 
-          y: Math.floor(y), 
-          width: Math.floor(width), 
-          height: Math.floor(height),
-          mode: mode
-        })
-          .then((result) => {
-            console.log("Capture success:", result);
-            // Rust closes the window
+        // Immediately hide selection div from DOM before capture
+        if (selectionRef.current) {
+          selectionRef.current.style.display = 'none';
+        }
+
+        // Force synchronous React state update
+        flushSync(() => {
+          setIsCapturing(true);
+          setStart(null);
+          setCurrent(null);
+        });
+
+        // Wait for browser paint before invoking capture
+        setTimeout(() => {
+          invoke("capture_region", {
+            x: Math.floor(x),
+            y: Math.floor(y),
+            width: Math.floor(width),
+            height: Math.floor(height),
+            mode: mode
           })
-          .catch((err) => {
-            console.error("Capture failed:", err);
-            setIsCapturing(false);
-            // If it failed and didn't close, show it again
-            getCurrentWindow().show();
-            window.focus();
-          });
+            .then((result) => {
+              console.log("Capture success:", result);
+              // Rust closes the window
+            })
+            .catch((err) => {
+              console.error("Capture failed:", err);
+              setIsCapturing(false);
+              // If it failed and didn't close, show it again
+              getCurrentWindow().show();
+              window.focus();
+            });
+        }, 100);
       } else {
         setStart(null);
         setCurrent(null);
@@ -104,6 +117,7 @@ export default function Selector() {
     >
       {!isCapturing && start && current && (
         <div
+          ref={selectionRef}
           className="absolute border-2 border-blue-500 bg-blue-500/5 shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]"
           style={{
             left: Math.min(start.x, current.x),

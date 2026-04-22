@@ -52,7 +52,7 @@ export async function performQuickTranslate(text: string): Promise<QuickTranslat
     let responseText = "";
 
     if (provider === "openai" || provider === "kimi") {
-      const baseUrl = provider === "kimi" ? "https://api.moonshot.cn" : "https://api.openai.com";
+      const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: {

@@ -89,7 +89,7 @@ Return format: [5, 2, 8, 1] (most relevant first). If no files are relevant, ret
     let responseText = "";
 
     if (provider === "openai" || provider === "kimi") {
-      const baseUrl = provider === "kimi" ? "https://api.moonshot.cn" : "https://api.openai.com";
+      const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: {

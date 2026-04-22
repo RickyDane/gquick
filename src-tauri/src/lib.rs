@@ -61,6 +61,8 @@ use std::time::{Duration, Instant};
 
 struct ShortcutState {
     main_shortcut: Mutex<String>,
+    screenshot_shortcut: Mutex<String>,
+    ocr_shortcut: Mutex<String>,
 }
 
 struct FileIndex {
@@ -820,7 +822,12 @@ fn capture_region(window: tauri::Window, x: i32, y: i32, width: u32, height: u32
 
         // Handle Modes
         if mode == "screenshot" {
-            let _ = app.opener().open_path(&path, None::<&str>);
+            // Copy screenshot to clipboard
+            let width = cropped.width();
+            let height = cropped.height();
+            let rgba_bytes = cropped.into_raw();
+            let tauri_image = tauri::image::Image::new_owned(rgba_bytes, width, height);
+            let _ = app.clipboard().write_image(&tauri_image);
         } else if mode == "ocr" {
             let ocr_text = run_ocr(&app, &path);
             
@@ -974,6 +981,40 @@ fn update_main_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), S
     Ok(())
 }
 
+#[tauri::command]
+fn update_screenshot_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    let state = app.state::<ShortcutState>();
+    let old_shortcut_str = state.screenshot_shortcut.lock().unwrap().clone();
+    
+    let new_shortcut = parse_shortcut(&shortcut)?;
+    app.global_shortcut().register(new_shortcut).map_err(|e| e.to_string())?;
+    
+    if let Ok(old_shortcut) = parse_shortcut(&old_shortcut_str) {
+        let _ = app.global_shortcut().unregister(old_shortcut);
+    }
+    
+    *state.screenshot_shortcut.lock().unwrap() = shortcut;
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn update_ocr_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    let state = app.state::<ShortcutState>();
+    let old_shortcut_str = state.ocr_shortcut.lock().unwrap().clone();
+    
+    let new_shortcut = parse_shortcut(&shortcut)?;
+    app.global_shortcut().register(new_shortcut).map_err(|e| e.to_string())?;
+    
+    if let Ok(old_shortcut) = parse_shortcut(&old_shortcut_str) {
+        let _ = app.global_shortcut().unregister(old_shortcut);
+    }
+    
+    *state.ocr_shortcut.lock().unwrap() = shortcut;
+    
+    Ok(())
+}
+
 fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(false);
@@ -1025,42 +1066,89 @@ pub fn run() {
                             }
                         }
                         
-                        if shortcut.mods == Modifiers::ALT && (shortcut.key == Code::KeyS || shortcut.key == Code::KeyO) {
-                            let mode = if shortcut.key == Code::KeyS { "screenshot" } else { "ocr" };
-                            
-                            let monitor = app.primary_monitor().ok().flatten();
-                            
-                            if let Some(m) = monitor {
-                                let pos = m.position();
-                                let size = m.size();
-                                let scale_factor = m.scale_factor();
-                                let logical_pos = pos.to_logical::<f64>(scale_factor);
-                                let logical_size = size.to_logical::<f64>(scale_factor);
+                        // Check screenshot shortcut
+                        let screenshot_str = state.screenshot_shortcut.lock().unwrap().clone();
+                        if let Ok(screenshot_shortcut) = parse_shortcut(&screenshot_str) {
+                            if shortcut.mods == screenshot_shortcut.mods && shortcut.key == screenshot_shortcut.key {
+                                let mode = "screenshot";
+                                let monitor = app.primary_monitor().ok().flatten();
+                                
+                                if let Some(m) = monitor {
+                                    let pos = m.position();
+                                    let size = m.size();
+                                    let scale_factor = m.scale_factor();
+                                    let logical_pos = pos.to_logical::<f64>(scale_factor);
+                                    let logical_size = size.to_logical::<f64>(scale_factor);
 
-                                if let Some(selector) = app.get_webview_window("selector") {
-                                    let _ = selector.emit("set-mode", mode);
-                                    let _ = selector.set_size(tauri::Size::Logical(logical_size));
-                                    let _ = selector.set_position(tauri::Position::Logical(logical_pos));
-                                    let _ = selector.show();
-                                    let _ = selector.set_focus();
-                                } else {
-                                    let builder = tauri::WebviewWindowBuilder::new(
-                                        app,
-                                        "selector",
-                                        tauri::WebviewUrl::App(format!("index.html?mode={}", mode).into()),
-                                    )
-                                    .title("Selector")
-                                    .inner_size(logical_size.width, logical_size.height)
-                                    .position(logical_pos.x, logical_pos.y)
-                                    .decorations(false)
-                                    .transparent(true)
-                                    .always_on_top(true)
-                                    .shadow(false)
-                                    .visible(false);
-                                    
-                                    if let Ok(window) = builder.build() {
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
+                                    if let Some(selector) = app.get_webview_window("selector") {
+                                        let _ = selector.emit("set-mode", mode);
+                                        let _ = selector.set_size(tauri::Size::Logical(logical_size));
+                                        let _ = selector.set_position(tauri::Position::Logical(logical_pos));
+                                        let _ = selector.show();
+                                        let _ = selector.set_focus();
+                                    } else {
+                                        let builder = tauri::WebviewWindowBuilder::new(
+                                            app,
+                                            "selector",
+                                            tauri::WebviewUrl::App(format!("index.html?mode={}", mode).into()),
+                                        )
+                                        .title("Selector")
+                                        .inner_size(logical_size.width, logical_size.height)
+                                        .position(logical_pos.x, logical_pos.y)
+                                        .decorations(false)
+                                        .transparent(true)
+                                        .always_on_top(true)
+                                        .shadow(false)
+                                        .visible(false);
+                                        
+                                        if let Ok(window) = builder.build() {
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check OCR shortcut
+                        let ocr_str = state.ocr_shortcut.lock().unwrap().clone();
+                        if let Ok(ocr_shortcut) = parse_shortcut(&ocr_str) {
+                            if shortcut.mods == ocr_shortcut.mods && shortcut.key == ocr_shortcut.key {
+                                let mode = "ocr";
+                                let monitor = app.primary_monitor().ok().flatten();
+                                
+                                if let Some(m) = monitor {
+                                    let pos = m.position();
+                                    let size = m.size();
+                                    let scale_factor = m.scale_factor();
+                                    let logical_pos = pos.to_logical::<f64>(scale_factor);
+                                    let logical_size = size.to_logical::<f64>(scale_factor);
+
+                                    if let Some(selector) = app.get_webview_window("selector") {
+                                        let _ = selector.emit("set-mode", mode);
+                                        let _ = selector.set_size(tauri::Size::Logical(logical_size));
+                                        let _ = selector.set_position(tauri::Position::Logical(logical_pos));
+                                        let _ = selector.show();
+                                        let _ = selector.set_focus();
+                                    } else {
+                                        let builder = tauri::WebviewWindowBuilder::new(
+                                            app,
+                                            "selector",
+                                            tauri::WebviewUrl::App(format!("index.html?mode={}", mode).into()),
+                                        )
+                                        .title("Selector")
+                                        .inner_size(logical_size.width, logical_size.height)
+                                        .position(logical_pos.x, logical_pos.y)
+                                        .decorations(false)
+                                        .transparent(true)
+                                        .always_on_top(true)
+                                        .shadow(false)
+                                        .visible(false);
+                                        
+                                        if let Ok(window) = builder.build() {
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                        }
                                     }
                                 }
                             }
@@ -1110,12 +1198,14 @@ pub fn run() {
 
             app.manage(ShortcutState {
                 main_shortcut: Mutex::new(default_shortcut),
+                screenshot_shortcut: Mutex::new("Alt+S".to_string()),
+                ocr_shortcut: Mutex::new("Alt+O".to_string()),
             });
 
-            let screenshot_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyS);
+            let screenshot_shortcut = parse_shortcut("Alt+S").map_err(|e| format!("Failed to parse screenshot shortcut: {}", e))?;
             app.global_shortcut().register(screenshot_shortcut)?;
 
-            let ocr_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyO);
+            let ocr_shortcut = parse_shortcut("Alt+O").map_err(|e| format!("Failed to parse OCR shortcut: {}", e))?;
             app.global_shortcut().register(ocr_shortcut)?;
 
             Ok(())
@@ -1136,7 +1226,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![greet, list_apps, list_containers, list_images, delete_image, manage_container, open_app, capture_region, search_files, smart_search_files, open_file, update_main_shortcut])
+        .invoke_handler(tauri::generate_handler![greet, list_apps, list_containers, list_images, delete_image, manage_container, open_app, capture_region, search_files, smart_search_files, open_file, update_main_shortcut, update_screenshot_shortcut, update_ocr_shortcut])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

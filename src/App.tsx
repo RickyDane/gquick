@@ -60,19 +60,35 @@ function App() {
     if (model) setSelectedModel(model);
   }, [view]);
 
-  // Sync saved shortcut with Rust backend on mount
+  // Sync saved shortcuts with Rust backend on mount
   useEffect(() => {
-    const syncShortcut = async () => {
-      const saved = localStorage.getItem("main-shortcut");
-      if (saved) {
+    const syncShortcuts = async () => {
+      const savedMain = localStorage.getItem("main-shortcut");
+      if (savedMain) {
         try {
-          await invoke("update_main_shortcut", { shortcut: saved });
+          await invoke("update_main_shortcut", { shortcut: savedMain });
         } catch (err) {
-          console.error("Failed to sync shortcut:", err);
+          console.error("Failed to sync main shortcut:", err);
+        }
+      }
+      const savedScreenshot = localStorage.getItem("screenshot-shortcut");
+      if (savedScreenshot) {
+        try {
+          await invoke("update_screenshot_shortcut", { shortcut: savedScreenshot });
+        } catch (err) {
+          console.error("Failed to sync screenshot shortcut:", err);
+        }
+      }
+      const savedOcr = localStorage.getItem("ocr-shortcut");
+      if (savedOcr) {
+        try {
+          await invoke("update_ocr_shortcut", { shortcut: savedOcr });
+        } catch (err) {
+          console.error("Failed to sync OCR shortcut:", err);
         }
       }
     };
-    syncShortcut();
+    syncShortcuts();
   }, []);
 
   useEffect(() => {
@@ -142,7 +158,7 @@ function App() {
         e.preventDefault();
         setView(prev => prev === "actions" ? "search" : "actions");
       }
-      
+
       if ((e.metaKey || e.ctrlKey) && e.key === "c" && view !== "actions") {
          e.preventDefault();
          setView("chat");
@@ -348,7 +364,7 @@ function App() {
       const history = messages.filter(m => m.role !== "assistant" || m.id !== "1");
 
       if (provider === "openai" || provider === "kimi") {
-        const baseUrl = provider === "kimi" ? "https://api.moonshot.cn" : "https://api.openai.com";
+        const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
         await streamOpenAI(
           `${baseUrl}/v1/chat/completions`,
           {
@@ -468,7 +484,7 @@ function App() {
           spellCheck={false}
         />
         {view === "chat" ? (
-          <button 
+          <button
             onClick={handleSendMessage}
             disabled={isLoading}
             className="p-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white transition-colors"
@@ -476,7 +492,7 @@ function App() {
             <Send className="h-4 w-4" />
           </button>
         ) : (
-          <div 
+          <div
             className={cn(
               "flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium border transition-colors cursor-pointer",
               view === "actions" ? "bg-blue-500/20 border-blue-500/50 text-blue-400" : "bg-zinc-800 border-white/5 text-zinc-400 hover:bg-zinc-700"
@@ -609,7 +625,7 @@ function App() {
                   const isActive = activeIndex === idx;
                   return (
                     <div key={item.id}>
-                      <div 
+                      <div
                         ref={(el) => {
                           if (isActive && el) {
                             el.scrollIntoView({
@@ -687,7 +703,7 @@ function App() {
             <span>Actions</span>
           </div>
         </div>
-        <div 
+        <div
           className="flex items-center gap-2 cursor-pointer hover:text-zinc-300 transition-colors"
           onClick={() => setView(view === "settings" || view === "actions" ? "search" : "settings")}
         >

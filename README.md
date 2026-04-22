@@ -253,6 +253,13 @@ npm run tauri dev
 # Install Tesseract via Chocolatey
 choco install tesseract
 
+# Install vcpkg and native OCR libraries used by the Rust build
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+C:\vcpkg\vcpkg.exe install leptonica:x64-windows tesseract:x64-windows
+set VCPKG_ROOT=C:\vcpkg
+set VCPKGRS_DYNAMIC=1
+
 # Install dependencies
 npm install
 
@@ -271,6 +278,7 @@ sudo apt-get install -y \
   libappindicator3-dev \
   librsvg2-dev \
   patchelf \
+  libpipewire-0.3-dev \
   libtesseract-dev \
   libleptonica-dev \
   libclang-dev \

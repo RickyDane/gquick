@@ -83,6 +83,7 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
+            libpipewire-0.3-dev \
             libtesseract-dev \
             libleptonica-dev \
             libclang-dev \
@@ -97,6 +98,11 @@ jobs:
         if: matrix.os_name == 'windows'
         run: |
           choco install tesseract
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install leptonica:x64-windows tesseract:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
 
       # ------------------------------------------------------------------
       # Build application

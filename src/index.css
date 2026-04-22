@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: transparent !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: transparent !important;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  -webkit-user-select: none;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  background-color: transparent !important;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  /* Top padding to position the app slightly above center */
+  padding-top: 10vh;
+  padding-bottom: 40px;
+  padding-left: 40px;
+  padding-right: 40px;
+}
+
+/* Ensure any default tauri backgrounds are transparent */
+.tauri-drag-region {
+  background-color: transparent !important;
+}

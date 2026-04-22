@@ -1,0 +1,273 @@
+# Sequence Diagrams
+
+## Application Startup
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant App as GQuick App
+    participant Builder as Tauri Builder
+    participant Tray as System Tray
+    participant Shortcuts as Global Shortcuts
+    participant Window as Main Window
+
+    User->>App: Launch Application
+    App->>Builder: tauri::Builder::default()
+    Builder->>Builder: Initialize plugins
+    Builder->>Builder: Configure window events
+    Builder->>Builder: Register invoke handlers
+    Builder->>App: Build and run
+
+    App->>Tray: Create tray icon with menu
+    Tray->>Tray: Add "Quit" menu item
+    Tray->>Tray: Configure click handler
+
+    App->>Shortcuts: Register Alt+Space
+    App->>Shortcuts: Register Alt+S
+    App->>Shortcuts: Register Alt+O
+
+    App->>Window: Create main window
+    Window->>Window: Set size: 760x800
+    Window->>Window: Set transparent, borderless
+    Window->>Window: Hide initially
+
+    App-->>User: App ready (hidden)
+```
+
+## Search and Launch
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant App as App.tsx
+    participant Plugins as Plugin System
+    participant AL as App Launcher
+    participant Calc as Calculator
+    participant Docker as Docker Plugin
+    participant WS as Web Search
+    participant Rust as Rust Backend
+
+    User->>App: Press Alt+Space
+    App->>App: Show window
+    App->>App: Focus input
+
+    User->>App: Type "calc 2+2"
+    App->>App: setQuery("calc 2+2")
+    App->>App: setActiveIndex(0)
+    App->>App: setTimeout(50ms)
+
+    App->>Plugins: getItems("calc 2+2")
+    Plugins->>AL: getItems("calc 2+2")
+    AL->>AL: Filter apps
+    AL-->>Plugins: []
+
+    Plugins->>Calc: getItems("calc 2+2")
+    Calc->>Calc: Validate regex
+    Calc->>Calc: Evaluate: 2+2 = 4
+    Calc-->>Plugins: [{title: "= 4", subtitle: "Calculation: 2+2"}]
+
+    Plugins->>Docker: getItems("calc 2+2")
+    Docker->>Rust: invoke("list_containers")
+    Rust->>Rust: docker ps -a
+    Rust-->>Docker: []
+    Docker-->>Plugins: []
+
+    Plugins->>WS: getItems("calc 2+2")
+    WS-->>Plugins: [Google search result]
+
+    Plugins-->>App: Flattened results
+    App->>App: setItems(results)
+    App->>App: Render list
+
+    User->>App: Press Enter
+    App->>Calc: item.onSelect()
+    Calc->>Calc: navigator.clipboard.writeText("4")
+    App->>App: Hide window
+```
+
+## Screenshot Capture
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant GS as Global Shortcut
+    participant Rust as Rust Backend
+    participant Selector as Selector Window
+    participant xcap as xcap crate
+    participant Image as image crate
+    participant FS as File System
+
+    User->>GS: Press Alt+S
+    GS->>Rust: Handler triggered
+    Rust->>Rust: Get primary monitor
+    Rust->>Rust: Calculate logical size/position
+
+    alt Selector exists
+        Rust->>Selector: emit("set-mode", "screenshot")
+        Rust->>Selector: show(), setFocus()
+    else Selector doesn't exist
+        Rust->>Rust: WebviewWindowBuilder::new("selector")
+        Rust->>Selector: Set fullscreen, transparent
+        Rust->>Selector: Build, show, focus
+    end
+
+    User->>Selector: Drag from (100,100) to (500,400)
+    Selector->>Selector: Calculate: x=100, y=100, w=400, h=300
+    Selector->>Rust: invoke("capture_region", coords, "screenshot")
+
+    Rust->>Rust: Get monitor name
+    Rust->>Rust: Get scale factor (e.g., 2.0)
+    Rust->>Selector: window.hide()
+    Rust->>Rust: thread::sleep(150ms)
+
+    Rust->>xcap: Monitor::all()
+    xcap-->>Rust: Monitor list
+    Rust->>Rust: Find matching monitor
+    Rust->>xcap: monitor.capture_image()
+    xcap-->>Rust: Full monitor image
+
+    Rust->>Rust: Convert logical to physical
+    Rust->>Rust: phys_x = 200, phys_y = 200, phys_w = 800, phys_h = 600
+    Rust->>Image: imageops::crop_imm(image, 200, 200, 800, 600)
+    Image-->>Rust: Cropped image
+
+    Rust->>FS: Save to ~/Desktop/gquick_capture.png
+    FS-->>Rust: Success
+
+    Rust->>Rust: Command::new("open").arg(path).spawn()
+    Rust->>Selector: window.close()
+    Rust-->>Selector: Return path
+```
+
+## OCR Flow (Current Mock Implementation)
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant GS as Global Shortcut
+    participant Rust as Rust Backend
+    participant Selector as Selector Window
+    participant xcap as xcap crate
+    participant Image as image crate
+    participant FS as File System
+    participant Clipboard as Clipboard Manager
+
+    User->>GS: Press Alt+O
+    GS->>Rust: Handler triggered
+    Rust->>Rust: mode = "ocr"
+    Rust->>Selector: Create/show selector window
+
+    User->>Selector: Drag to select region
+    Selector->>Rust: invoke("capture_region", coords, "ocr")
+
+    Rust->>Rust: Hide selector, sleep 150ms
+    Rust->>xcap: Capture monitor image
+    xcap-->>Rust: Fullscreen image
+    Rust->>Image: Crop to region
+    Image-->>Rust: Cropped image
+    Rust->>FS: Save to ~/Desktop/gquick_capture.png
+
+    Note over Rust: OCR NOT IMPLEMENTED
+    Rust->>Clipboard: write_text("Sample OCR Text...")
+    Clipboard-->>Rust: Success
+
+    Rust->>Selector: window.close()
+    Rust-->>Selector: Return path
+
+    Note over User,Clipboard: In future: send image to AI vision API, extract text, copy result
+```
+
+## Settings Configuration
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant App as App.tsx
+    participant Settings as Settings.tsx
+    participant Storage as localStorage
+
+    User->>App: Press ⌘,
+    App->>App: setView("settings")
+    App->>Settings: Render <Settings onClose={handleClose} />
+
+    Settings->>Storage: getItem("api-key")
+    Storage-->>Settings: "sk-abc123"
+    Settings->>Settings: setApiKey("sk-abc123")
+
+    Settings->>Storage: getItem("api-provider")
+    Storage-->>Settings: "openai"
+    Settings->>Settings: setApiProvider("openai")
+
+    Settings->>Storage: getItem("ocr-model")
+    Storage-->>Settings: "gpt-4o-mini"
+    Settings->>Settings: setOcrModel("gpt-4o-mini")
+
+    Settings->>Storage: getItem("auth-provider")
+    Storage-->>Settings: null
+    Settings->>Settings: setAuthProvider(null)
+
+    Settings->>App: Render with loaded values
+
+    User->>Settings: Click "Connect" on OpenAI
+    Settings->>Settings: setAuthProvider("openai")
+    Settings->>Settings: Re-render (shows "Connected")
+
+    User->>Settings: Enter new API key
+    Settings->>Settings: setApiKey("sk-newkey")
+
+    User->>Settings: Select "GPT-4o" from dropdown
+    Settings->>Settings: setOcrModel("gpt-4o")
+
+    User->>Settings: Click "Save Changes"
+    Settings->>Storage: setItem("api-key", "sk-newkey")
+    Settings->>Storage: setItem("api-provider", "openai")
+    Settings->>Storage: setItem("ocr-model", "gpt-4o")
+    Settings->>Storage: setItem("auth-provider", "openai")
+    Settings->>App: onClose()
+    App->>App: setView("search")
+```
+
+## Docker Container Management
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant App as App.tsx
+    participant Docker as Docker Plugin
+    participant Rust as Rust Backend
+    participant System as Docker Daemon
+
+    User->>App: Type "docker"
+    App->>Docker: getItems("docker")
+
+    Docker->>Rust: invoke("list_containers")
+    Rust->>System: docker ps -a --format "..."
+    System-->>Rust: Container list
+    Rust-->>Docker: ContainerInfo[]
+
+    Docker->>Rust: invoke("list_images")
+    Rust->>System: docker images --format "..."
+    System-->>Rust: Image list
+    Rust-->>Docker: ImageInfo[]
+
+    Docker->>Docker: Filter and format results
+    Docker-->>App: SearchResultItem[]
+    App->>App: Render results
+
+    User->>App: Select container "nginx"
+    App->>Docker: Show actions
+
+    alt User selects "Stop"
+        Docker->>Rust: invoke("manage_container", {id: "abc", action: "stop"})
+        Rust->>System: docker stop abc
+        System-->>Rust: Success
+        Rust-->>Docker: Ok(())
+    else User selects "Restart"
+        Docker->>Rust: invoke("manage_container", {id: "abc", action: "restart"})
+        Rust->>System: docker restart abc
+        System-->>Rust: Success
+        Rust-->>Docker: Ok(())
+    end
+
+    Docker->>App: Refresh list
+```

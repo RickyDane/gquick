@@ -1,0 +1,236 @@
+# System Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "User Interface Layer"
+        A[App.tsx
+        Search + Chat + Actions]
+        S[Selector.tsx
+        Region Selection]
+        ST[Settings.tsx
+        AI Configuration]
+    end
+
+    subgraph "Plugin Layer"
+        P1[App Launcher]
+        P2[Calculator]
+        P3[Docker Manager]
+        P4[Web Search]
+    end
+
+    subgraph "Tauri Bridge"
+        TC[Tauri Commands
+        invoke/emit]
+        TE[Tauri Events
+        listen]
+        GS[Global Shortcuts
+        Alt+Space/S/O]
+        WM[Window Manager
+        show/hide/focus]
+    end
+
+    subgraph "Rust Backend"
+        RC[Command Handlers
+        lib.rs]
+        SC[Screen Capture
+        xcap + image]
+        DC[Docker Integration
+        docker CLI]
+        AC[App Launcher
+        filesystem scan]
+        TR[Tray Manager
+        menu + icon]
+        CL[Clipboard Manager
+        write_text]
+    end
+
+    subgraph "System Layer"
+        SYS1[macOS Dock/Apps]
+        SYS2[Docker Daemon]
+        SYS3[Screen Buffer]
+        SYS4[File System]
+        SYS5[System Clipboard]
+        SYS6[Default Browser]
+    end
+
+    A --> P1
+    A --> P2
+    A --> P3
+    A --> P4
+    A --> ST
+    S --> TC
+
+    P1 --> TC
+    P2 --> TC
+    P3 --> TC
+    P4 --> TC
+
+    TC --> RC
+    TE --> RC
+    GS --> WM
+    WM --> RC
+
+    RC --> SC
+    RC --> DC
+    RC --> AC
+    RC --> TR
+    RC --> CL
+
+    SC --> SYS3
+    SC --> SYS4
+    DC --> SYS2
+    AC --> SYS1
+    CL --> SYS5
+    P4 --> SYS6
+
+    TR --> GS
+    WM --> A
+    WM --> S
+```
+
+## Component Diagram
+
+```mermaid
+graph TB
+    subgraph "Frontend (React 19 + TypeScript)"
+        direction TB
+        M[main.tsx
+        Window Router]
+        A[App.tsx
+        Main Component]
+        Se[Selector.tsx
+        Overlay]
+        St[Settings.tsx
+        Configuration]
+
+        subgraph "Plugins"
+            PL[Plugin Registry]
+            P1[appLauncher]
+            P2[calculator]
+            P3[docker]
+            P4[webSearch]
+        end
+    end
+
+    subgraph "Tauri Runtime"
+        direction TB
+        TC[Command Router]
+        TE[Event Bus]
+        GS[Global Shortcut
+        Manager]
+        WM[Window Manager]
+        TR[System Tray]
+    end
+
+    subgraph "Backend (Rust)"
+        direction TB
+        CH[Command Handlers
+        lib.rs]
+        CA[Capture Agent
+        xcap + image]
+        DI[Docker Interface
+        shell commands]
+        AL[App Launcher
+        filesystem]
+        CM[Clipboard Manager]
+    end
+
+    M --> A
+    M --> Se
+    A --> St
+    A --> PL
+    PL --> P1
+    PL --> P2
+    PL --> P3
+    PL --> P4
+
+    A --> TC
+    Se --> TC
+    St --> TC
+    P1 --> TC
+    P3 --> TC
+    P4 --> TC
+
+    TC --> CH
+    TE --> CH
+    GS --> WM
+    WM --> A
+    WM --> Se
+    TR --> WM
+
+    CH --> CA
+    CH --> DI
+    CH --> AL
+    CH --> CM
+```
+
+## Deployment Architecture
+
+```mermaid
+graph LR
+    subgraph "Development"
+        Vite[Vite Dev Server
+        localhost:1420]
+        Rust[Rust Dev Build
+        cargo]
+        Vite --> Rust
+    end
+
+    subgraph "Build"
+        TS[TypeScript Compile]
+        ViteBuild[Vite Build
+        ../dist]
+        CargoBuild[Cargo Build
+        Release Binary]
+        TS --> ViteBuild
+        ViteBuild --> CargoBuild
+    end
+
+    subgraph "Runtime (macOS)"
+        App[GQuick.app]
+        Binary[Tauri Binary
+        + Rust Lib]
+        Frontend[Frontend Assets
+        dist/]
+        Binary --> Frontend
+        App --> Binary
+    end
+
+    CargoBuild --> App
+```
+
+## Data Architecture
+
+```mermaid
+graph LR
+    subgraph "Ephemeral State"
+        RS[React State
+        useState]
+        RC[React Cache
+        appsCache]
+    end
+
+    subgraph "Persistent Storage"
+        LS[localStorage
+        Settings]
+        FS[File System
+        Screenshots]
+    end
+
+    subgraph "External Systems"
+        Docker[Docker Daemon
+        CLI]
+        macOS[macOS Apps
+        /Applications]
+        Browser[Default Browser
+        URLs]
+    end
+
+    RS --> A[App.tsx]
+    RC --> P1[appLauncher]
+    LS --> St[Settings.tsx]
+    FS --> CA[capture_region]
+    Docker --> P3[docker]
+    macOS --> P1
+    Browser --> P4[webSearch]
+```

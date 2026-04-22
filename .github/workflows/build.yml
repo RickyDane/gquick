@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             os_name: linux
           - platform: windows-latest
@@ -83,7 +83,10 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
+            libdbus-1-dev \
             libpipewire-0.3-dev \
+            libwayland-dev \
+            libegl-dev \
             libtesseract-dev \
             libleptonica-dev \
             libclang-dev \

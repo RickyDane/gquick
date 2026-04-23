@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Key, Eye, EyeOff, Loader2, Command } from "lucide-react";
+import { Key, Eye, EyeOff, Loader2, Command, Save } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import ShortcutRecorder from "./components/ShortcutRecorder";
 
@@ -17,7 +17,7 @@ const ANTHROPIC_MODELS: Model[] = [
 const PROVIDERS = [
   { id: "openai", name: "OpenAI" },
   { id: "google", name: "Google Gemini" },
-  { id: "kimi", name: "Kimi / Moonshot" },
+  // { id: "kimi", name: "Kimi / Moonshot" },
   { id: "anthropic", name: "Anthropic Claude" },
 ];
 
@@ -32,6 +32,8 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [mainShortcut, setMainShortcut] = useState("Alt+Space");
   const [screenshotShortcut, setScreenshotShortcut] = useState("Alt+S");
   const [ocrShortcut, setOcrShortcut] = useState("Alt+O");
+  const [quickNoteShortcut, setQuickNoteShortcut] = useState("CmdOrCtrl+Shift+N");
+  const [searchNotesShortcut, setSearchNotesShortcut] = useState("CmdOrCtrl+Shift+S");
 
   useEffect(() => {
     const savedKey = localStorage.getItem("api-key");
@@ -51,6 +53,12 @@ export default function Settings({ onClose }: { onClose: () => void }) {
 
     const savedOcrShortcut = localStorage.getItem("ocr-shortcut");
     if (savedOcrShortcut) setOcrShortcut(savedOcrShortcut);
+
+    const savedQuickNoteShortcut = localStorage.getItem("quick-note-shortcut");
+    if (savedQuickNoteShortcut) setQuickNoteShortcut(savedQuickNoteShortcut);
+
+    const savedSearchNotesShortcut = localStorage.getItem("search-notes-shortcut");
+    if (savedSearchNotesShortcut) setSearchNotesShortcut(savedSearchNotesShortcut);
 
     // Load cached models if available
     const cachedModels = localStorage.getItem(`models-${savedProvider || "openai"}`);
@@ -176,8 +184,8 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="flex flex-col h-[420px] p-6 text-zinc-200">
-      <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
+    <div className="flex flex-col h-125 px-6 text-zinc-200">
+      <div className="space-y-6 flex-1 overflow-y-auto py-6 custom-scrollbar">
         {/* Global Shortcut Configuration */}
         <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
           <div className="flex items-center justify-between">
@@ -239,6 +247,35 @@ export default function Settings({ onClose }: { onClose: () => void }) {
             <p className="text-[11px] text-zinc-500 ml-1">
               Shortcut to extract text from a selected region
             </p>
+          </div>
+          <div className="border-t border-white/5 pt-4 mt-2">
+            <p className="text-[11px] text-zinc-500 font-bold uppercase ml-1 mb-3">Local Shortcuts (window focused)</p>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">Quick Note</span>
+              <ShortcutRecorder
+                value={quickNoteShortcut}
+                onChange={(value) => {
+                  setQuickNoteShortcut(value);
+                  localStorage.setItem("quick-note-shortcut", value);
+                }}
+              />
+              <p className="text-[11px] text-zinc-500 ml-1">
+                Shortcut to start a quick note (prefills note: in search)
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5 mt-3">
+              <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">Search Notes</span>
+              <ShortcutRecorder
+                value={searchNotesShortcut}
+                onChange={(value) => {
+                  setSearchNotesShortcut(value);
+                  localStorage.setItem("search-notes-shortcut", value);
+                }}
+              />
+              <p className="text-[11px] text-zinc-500 ml-1">
+                Shortcut to search your notes (prefills search notes: in search)
+              </p>
+            </div>
           </div>
         </div>
 
@@ -326,11 +363,12 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      <div className="pt-6 flex justify-end border-t border-white/5 mt-4">
+      <div className="py-3 flex justify-end border-t border-white/5 mt-2 mb-2">
         <button
           onClick={saveSettings}
-          className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all"
+          className="flex gap-2 items-center px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all cursor-pointer"
         >
+          <Save className="h-4 w-4" />
           Save
         </button>
       </div>

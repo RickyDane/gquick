@@ -28,9 +28,6 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             os_name: macos-arm
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            os_name: macos-intel
 
     runs-on: ${{ matrix.platform }}
 
@@ -98,18 +95,6 @@ jobs:
         run: |
           brew install tesseract
           mkdir -p src-tauri/macos-bundle/Frameworks src-tauri/macos-bundle/tessdata
-
-      - name: Install macOS dependencies (Intel)
-        if: matrix.os_name == 'macos-intel'
-        run: |
-          # Install x86_64 Homebrew into /usr/local
-          sudo mkdir -p /usr/local/Homebrew
-          curl -L https://github.com/Homebrew/brew/tarball/master | sudo tar xz -C /usr/local/Homebrew --strip 1
-          sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
-          # Install x86_64 tesseract + leptonica
-          arch -x86_64 /usr/local/bin/brew install tesseract
-          mkdir -p src-tauri/macos-bundle/Frameworks src-tauri/macos-bundle/tessdata
-          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Install Windows dependencies
         if: matrix.os_name == 'windows'

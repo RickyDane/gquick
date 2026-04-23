@@ -35,10 +35,13 @@ fn list_apps() -> Vec<AppInfo>
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `string` | Application name |
-| `path` | `string` | Full path to .app bundle |
+| `path` | `string` | Full path to app bundle or executable |
 | `icon` | `string \| null` | Icon path (always null currently) |
 
-**Platform**: macOS only (scans `/Applications`, `/System/Applications`)
+**Platform Support**:
+- **macOS**: Scans `/Applications`, `/System/Applications` for `.app`
+- **Windows**: Scans Start Menu paths for `.lnk`
+- **Linux**: Scans `/usr/share/applications`, desktop dirs for `.desktop`
 
 ---
 
@@ -53,11 +56,85 @@ fn open_app(path: String) -> Result<(), String>
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | `string` | Path to .app bundle |
+| `path` | `string` | Path to app bundle or executable |
 
 **Returns**: `Result<void, string>` — Error message on failure
 
 **Platform**: macOS (`open`), Windows (`cmd /C start`), Linux (`xdg-open`)
+
+---
+
+### `search_files`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn search_files(query: String) -> Result<Vec<FileInfo>, String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | `string` | Search query string |
+
+**Returns**: `Result<FileInfo[], string>`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | File or folder name |
+| `path` | `string` | Full path |
+| `is_dir` | `boolean` | Whether it's a directory |
+
+**Behavior**: Keyword-based scoring, returns top 50 results. Uses cached file index (5-min TTL).
+
+---
+
+### `smart_search_files`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn smart_search_files(query: String) -> Result<Vec<SmartFileInfo>, String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | `string` | Natural language query |
+
+**Returns**: `Result<SmartFileInfo[], string>`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | File or folder name |
+| `path` | `string` | Full path |
+| `is_dir` | `boolean` | Whether it's a directory |
+| `created` | `string \| null` | ISO 8601 creation time |
+| `modified` | `string \| null` | ISO 8601 modification time |
+| `size` | `number` | File size in bytes |
+| `content_preview` | `string \| null` | Flattened content preview (up to 3000 chars) |
+| `full_content` | `string \| null` | Full text content (up to 100KB) |
+
+**Behavior**: Reads file metadata, text content previews, supports time filtering (`today`, `last week`, etc.). Returns up to 100 candidates.
+
+---
+
+### `open_file`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn open_file(app: tauri::AppHandle, path: String) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `string` | File path to open |
+
+**Returns**: `Result<void, string>`
+
+**Behavior**: Opens file with default application via `tauri-plugin-opener`.
 
 ---
 
@@ -147,7 +224,7 @@ fn delete_image(id: String) -> Result<(), String>
 
 ### `capture_region`
 
-**Status**: Active (OCR is mocked)
+**Status**: Active
 
 ```rust
 #[tauri::command]
@@ -179,9 +256,91 @@ fn capture_region(
 5. Converts logical to physical coordinates
 6. Crops the image
 7. Saves to `~/Desktop/gquick_capture.png`
-8. If `mode == "screenshot"`: opens image with system viewer
-9. If `mode == "ocr"`: writes mock text to clipboard
+8. If `mode == "screenshot"`: copies image to clipboard
+9. If `mode == "ocr"`: runs Tesseract OCR, copies text to clipboard, emits `ocr-complete`
 10. Closes the selector window
+
+---
+
+### `update_main_shortcut`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn update_main_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `shortcut` | `string` | Shortcut string (e.g., `"Alt+Space"`) |
+
+**Returns**: `Result<void, string>`
+
+**Behavior**: Parses shortcut, registers new global shortcut, unregisters old one.
+
+---
+
+### `update_screenshot_shortcut`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn update_screenshot_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String>
+```
+
+Same behavior as `update_main_shortcut` but for screenshot shortcut.
+
+---
+
+### `update_ocr_shortcut`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn update_ocr_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String>
+```
+
+Same behavior as `update_main_shortcut` but for OCR shortcut.
+
+---
+
+### `open_image_dialog`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+async fn open_image_dialog(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DialogState>
+) -> Result<Vec<ImageAttachment>, String>
+```
+
+**Returns**: `ImageAttachment[]`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data_url` | `string` | Data URL for image display |
+| `mime_type` | `string` | Image MIME type |
+| `base64` | `string` | Base64-encoded image data |
+
+**Behavior**: Opens native multi-file picker for images (png, jpg, jpeg, webp, gif). Skips files > 5MB. Returns base64-encoded images for chat attachment.
+
+---
+
+### `close_selector`
+
+**Status**: Active
+
+```rust
+#[tauri::command]
+fn close_selector(window: tauri::Window)
+```
+
+**Behavior**: Closes the selector window. Used by Selector.tsx on Escape key.
 
 ---
 
@@ -199,34 +358,95 @@ listen<string>("set-mode", (event) => {
 
 **Purpose**: When the selector window is reused (already exists), the backend emits this event to update the mode without recreating the window.
 
-**Sent from**: `lib.rs:279`
+**Sent from**: `lib.rs` global shortcut handler
 
 ---
 
-## External APIs (Not Yet Implemented)
+### `window-hidden`
 
-### Planned AI Provider APIs
+**Direction**: Rust → Main window
 
-The Settings UI references these providers but no actual API integration exists:
+```typescript
+listen("window-hidden", () => {
+  // Reset search/chat state
+});
+```
 
-| Provider | Base URL (typical) | Auth Method |
-|----------|-------------------|-------------|
-| OpenAI | `https://api.openai.com/v1` | API Key (Bearer) |
-| Google Gemini | `https://generativelanguage.googleapis.com` | API Key (query param) |
-| Anthropic Claude | `https://api.anthropic.com/v1` | API Key (x-api-key header) |
-| Kimi/Moonshot | `https://api.moonshot.ai/v1` | API Key (Bearer) |
+**Purpose**: Emitted when the main window is hidden (blur, Escape, close requested). App.tsx listens to reset state.
 
-### Planned OAuth Flows
+**Sent from**: `lib.rs` window event handler and `toggle_window`
 
-No OAuth implementation exists. The UI shows "Connect" buttons that only toggle local state.
+---
 
-Typical OAuth 2.0 flow would be:
-1. User clicks "Connect" for provider
-2. App opens browser to provider's OAuth authorization URL
-3. User authenticates and authorizes
-4. Provider redirects to app with authorization code
-5. App exchanges code for access token
-6. Token stored securely (keychain/secure storage)
+### `window-shown`
+
+**Direction**: Rust → Main window
+
+```typescript
+listen("window-shown", () => {
+  // Window is now visible
+});
+```
+
+**Purpose**: Emitted when the main window is shown.
+
+---
+
+### `ocr-complete`
+
+**Direction**: Rust → Main window
+
+```typescript
+listen<string>("ocr-complete", (event) => {
+  // event.payload is first 100 chars of OCR text
+});
+```
+
+**Purpose**: Emitted after OCR text is extracted and copied to clipboard.
+
+---
+
+## External AI APIs (Implemented)
+
+All AI features make real HTTP calls. No mocking.
+
+### OpenAI / Kimi
+
+| Endpoint | Method | Headers |
+|----------|--------|---------|
+| `https://api.openai.com/v1/chat/completions` | POST | `Authorization: Bearer {apiKey}`, `Content-Type: application/json` |
+| `https://api.moonshot.ai/v1/chat/completions` | POST | Same as OpenAI |
+
+**Body**:
+```json
+{
+  "model": "gpt-4o",
+  "messages": [...],
+  "stream": true
+}
+```
+
+### Google Gemini
+
+| Endpoint | Method | Headers |
+|----------|--------|---------|
+| `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}&alt=sse` | POST | `Content-Type: application/json` |
+
+### Anthropic Claude
+
+| Endpoint | Method | Headers |
+|----------|--------|---------|
+| `https://api.anthropic.com/v1/messages` | POST | `x-api-key: {apiKey}`, `anthropic-version: 2023-06-01`, `Content-Type: application/json` |
+
+**Body**:
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "max_tokens": 4096,
+  "messages": [...],
+  "stream": true
+}
+```
 
 ---
 
@@ -258,5 +478,7 @@ interface SearchResultItem {
   icon: LucideIcon | string | React.ReactNode;
   onSelect: () => void; // Action on selection
   actions?: PluginAction[]; // Additional actions
+  renderPreview?: () => React.ReactNode; // Inline preview panel
+  score?: number;       // Higher = more relevant
 }
 ```

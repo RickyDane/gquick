@@ -8,14 +8,16 @@ graph TB
         S[Selector.tsx
         Region Selection]
         ST[Settings.tsx
-        AI Configuration]
+        API + Shortcuts Config]
     end
 
     subgraph "Plugin Layer"
         P1[App Launcher]
-        P2[Calculator]
-        P3[Docker Manager]
-        P4[Web Search]
+        P2[File Search]
+        P3[Calculator]
+        P4[Docker Manager]
+        P5[Web Search]
+        P6[Translate]
     end
 
     subgraph "Tauri Bridge"
@@ -34,29 +36,36 @@ graph TB
         lib.rs]
         SC[Screen Capture
         xcap + image]
+        OC[OCR Engine
+        tesseract]
         DC[Docker Integration
         docker CLI]
         AC[App Launcher
         filesystem scan]
+        FI[File Index
+        walkdir + cache]
         TR[Tray Manager
         menu + icon]
         CL[Clipboard Manager
-        write_text]
+        text + image]
     end
 
     subgraph "System Layer"
-        SYS1[macOS Dock/Apps]
+        SYS1[macOS/Win/Linux Apps]
         SYS2[Docker Daemon]
         SYS3[Screen Buffer]
         SYS4[File System]
         SYS5[System Clipboard]
         SYS6[Default Browser]
+        SYS7[AI Provider APIs]
     end
 
     A --> P1
     A --> P2
     A --> P3
     A --> P4
+    A --> P5
+    A --> P6
     A --> ST
     S --> TC
 
@@ -64,6 +73,10 @@ graph TB
     P2 --> TC
     P3 --> TC
     P4 --> TC
+    P5 --> TC
+    P6 --> TC
+    P6 --> SYS7
+    A --> SYS7
 
     TC --> RC
     TE --> RC
@@ -71,17 +84,21 @@ graph TB
     WM --> RC
 
     RC --> SC
+    RC --> OC
     RC --> DC
     RC --> AC
+    RC --> FI
     RC --> TR
     RC --> CL
 
     SC --> SYS3
     SC --> SYS4
+    OC --> SYS3
     DC --> SYS2
     AC --> SYS1
     CL --> SYS5
-    P4 --> SYS6
+    P5 --> SYS6
+    FI --> SYS4
 
     TR --> GS
     WM --> A
@@ -102,13 +119,22 @@ graph TB
         Overlay]
         St[Settings.tsx
         Configuration]
+        MM[MarkdownMessage
+        Chat Rendering]
+        SR[ShortcutRecorder
+        Shortcut Input]
+        QT[quickTranslate.ts]
+        Stream[streaming.ts
+        SSE Handlers]
 
         subgraph "Plugins"
             PL[Plugin Registry]
             P1[appLauncher]
-            P2[calculator]
-            P3[docker]
-            P4[webSearch]
+            P2[fileSearch]
+            P3[calculator]
+            P4[docker]
+            P5[webSearch]
+            P6[translate]
         end
     end
 
@@ -128,10 +154,14 @@ graph TB
         lib.rs]
         CA[Capture Agent
         xcap + image]
+        OC[OCR Engine
+        tesseract]
         DI[Docker Interface
         shell commands]
         AL[App Launcher
         filesystem]
+        FI[File Index
+        walkdir]
         CM[Clipboard Manager]
     end
 
@@ -139,17 +169,26 @@ graph TB
     M --> Se
     A --> St
     A --> PL
+    A --> MM
+    A --> Stream
+    A --> QT
+    St --> SR
     PL --> P1
     PL --> P2
     PL --> P3
     PL --> P4
+    PL --> P5
+    PL --> P6
 
     A --> TC
     Se --> TC
     St --> TC
     P1 --> TC
+    P2 --> TC
     P3 --> TC
     P4 --> TC
+    P5 --> TC
+    P6 --> TC
 
     TC --> CH
     TE --> CH
@@ -159,8 +198,10 @@ graph TB
     TR --> WM
 
     CH --> CA
+    CH --> OC
     CH --> DI
     CH --> AL
+    CH --> FI
     CH --> CM
 ```
 
@@ -186,8 +227,8 @@ graph LR
         ViteBuild --> CargoBuild
     end
 
-    subgraph "Runtime (macOS)"
-        App[GQuick.app]
+    subgraph "Runtime"
+        App[GQuick App]
         Binary[Tauri Binary
         + Rust Lib]
         Frontend[Frontend Assets
@@ -212,7 +253,7 @@ graph LR
 
     subgraph "Persistent Storage"
         LS[localStorage
-        Settings]
+        Settings + Models + Shortcuts]
         FS[File System
         Screenshots]
     end
@@ -220,17 +261,25 @@ graph LR
     subgraph "External Systems"
         Docker[Docker Daemon
         CLI]
-        macOS[macOS Apps
+        OS[OS Apps
         /Applications]
         Browser[Default Browser
         URLs]
+        AI[AI Provider APIs
+        OpenAI/Gemini/Claude/Kimi]
+        OCR[Tesseract OCR
+        Local Engine]
     end
 
     RS --> A[App.tsx]
     RC --> P1[appLauncher]
     LS --> St[Settings.tsx]
     FS --> CA[capture_region]
-    Docker --> P3[docker]
-    macOS --> P1
-    Browser --> P4[webSearch]
+    Docker --> P4[docker]
+    OS --> P1
+    Browser --> P5[webSearch]
+    AI --> A
+    AI --> P6[translate]
+    AI --> P2[fileSearch]
+    OCR --> CA
 ```

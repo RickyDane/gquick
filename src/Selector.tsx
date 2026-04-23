@@ -10,10 +10,14 @@ export default function Selector() {
   const [mode, setMode] = useState<string>("screenshot");
   const [isCapturing, setIsCapturing] = useState(false);
   const selectionRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Ensure window is focused to catch keys
+    // Focus the Tauri window natively
+    getCurrentWindow().setFocus();
+    // Also focus the DOM
     window.focus();
+    containerRef.current?.focus();
 
     // Get initial mode from URL
     const params = new URLSearchParams(window.location.search);
@@ -29,19 +33,27 @@ export default function Selector() {
       setStart(null);
       setCurrent(null);
       getCurrentWindow().show();
+      getCurrentWindow().setFocus();
       window.focus();
+      containerRef.current?.focus();
     });
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        getCurrentWindow().close();
+      if (e.key === "Escape" || e.code === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        // Use Rust command for reliable close
+        invoke("close_selector").catch(() => {
+          // Fallback
+          getCurrentWindow().close().catch(() => {});
+        });
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown);
     
     return () => {
       unlisten.then(f => f());
-      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
@@ -110,7 +122,9 @@ export default function Selector() {
 
   return (
     <div
-      className="fixed inset-0 cursor-crosshair bg-black/10 select-none"
+      ref={containerRef}
+      tabIndex={0}
+      className="fixed inset-0 cursor-crosshair bg-black/10 select-none outline-none"
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}

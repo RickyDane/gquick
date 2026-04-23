@@ -4,6 +4,7 @@ use tauri::{
     Emitter, Manager, Runtime,
 };
 use tauri_plugin_opener::OpenerExt;
+use base64::Engine;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState as GsShortcutState};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tesseract::Tesseract;
@@ -11,6 +12,137 @@ use tesseract::Tesseract;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn create_note(state: tauri::State<'_, DbState>, title: String, content: String) -> Result<Note, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO notes (title, content) VALUES (?1, ?2)",
+        rusqlite::params![&title, &content],
+    ).map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+    let note = conn.query_row(
+        "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?1",
+        rusqlite::params![id],
+        |row| {
+            Ok(Note {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        },
+    ).map_err(|e| e.to_string())?;
+
+    Ok(note)
+}
+
+#[tauri::command]
+fn get_notes(state: tauri::State<'_, DbState>) -> Result<Vec<Note>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, content, created_at, updated_at FROM notes ORDER BY updated_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let notes = stmt.query_map([], |row| {
+        Ok(Note {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            content: row.get(2)?,
+            created_at: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+
+    Ok(notes)
+}
+
+#[tauri::command]
+fn update_note(state: tauri::State<'_, DbState>, id: i64, title: String, content: String) -> Result<Note, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE notes SET title = ?1, content = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+        rusqlite::params![&title, &content, id],
+    ).map_err(|e| e.to_string())?;
+
+    let note = conn.query_row(
+        "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?1",
+        rusqlite::params![id],
+        |row| {
+            Ok(Note {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        },
+    ).map_err(|e| e.to_string())?;
+
+    Ok(note)
+}
+
+#[tauri::command]
+fn delete_note(state: tauri::State<'_, DbState>, id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM notes WHERE id = ?1",
+        rusqlite::params![id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn search_notes(state: tauri::State<'_, DbState>, query: String) -> Result<Vec<Note>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    // Escape SQL LIKE wildcards (% and _) so they are treated as literals
+    let escaped_query = query.replace("%", "\\%").replace("_", "\\_");
+    let search_pattern = format!("%{}%", escaped_query);
+    let mut stmt = conn.prepare(
+        "SELECT id, title, content, created_at, updated_at FROM notes WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY updated_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let notes = stmt.query_map(
+        rusqlite::params![&search_pattern],
+        |row| {
+            Ok(Note {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        }
+    ).map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+
+    Ok(notes)
+}
+
+#[tauri::command]
+fn get_note_by_id(state: tauri::State<'_, DbState>, id: i64) -> Result<Option<Note>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?1"
+    ).map_err(|e| e.to_string())?;
+
+    let mut rows = stmt.query(rusqlite::params![id]).map_err(|e| e.to_string())?;
+    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let note = Note {
+            id: row.get(0).map_err(|e| e.to_string())?,
+            title: row.get(1).map_err(|e| e.to_string())?,
+            content: row.get(2).map_err(|e| e.to_string())?,
+            created_at: row.get(3).map_err(|e| e.to_string())?,
+            updated_at: row.get(4).map_err(|e| e.to_string())?,
+        };
+        Ok(Some(note))
+    } else {
+        Ok(None)
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -63,6 +195,23 @@ struct ShortcutState {
     main_shortcut: Mutex<String>,
     screenshot_shortcut: Mutex<String>,
     ocr_shortcut: Mutex<String>,
+}
+
+struct DialogState {
+    is_open: std::sync::Mutex<bool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct Note {
+    id: i64,
+    title: String,
+    content: String,
+    created_at: String,
+    updated_at: String,
+}
+
+struct DbState {
+    conn: Mutex<rusqlite::Connection>,
 }
 
 struct FileIndex {
@@ -1015,6 +1164,92 @@ fn update_ocr_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), St
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct ImageAttachment {
+    data_url: String,
+    mime_type: String,
+    base64: String,
+}
+
+#[tauri::command]
+fn close_selector(window: tauri::Window) {
+    let _ = window.close();
+}
+
+#[tauri::command]
+async fn open_image_dialog(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DialogState>
+) -> Result<Vec<ImageAttachment>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // Mark dialog as open so Focused(false) doesn't hide the window
+    {
+        let mut is_open = state.is_open.lock().unwrap();
+        *is_open = true;
+    }
+
+    // Open native file picker (blocking via channel)
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif"])
+        .pick_files(move |files| {
+            let _ = tx.send(files);
+        });
+    let files = rx.recv().unwrap_or(None);
+
+    // Mark dialog as closed
+    {
+        let mut is_open = state.is_open.lock().unwrap();
+        *is_open = false;
+    }
+
+    // Show and focus the main window again
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+
+    let Some(paths) = files else {
+        return Ok(vec![]);
+    };
+
+    let mut images = Vec::new();
+    for path in paths {
+        let path_str = path.to_string();
+        let contents = match std::fs::read(&path_str) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Skip if > 5MB
+        if contents.len() > 5 * 1024 * 1024 {
+            continue;
+        }
+
+        let extension = path_str.split('.').last().unwrap_or("").to_lowercase();
+        let mime_type = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            _ => "image/png",
+        };
+
+        let base64_str = base64::engine::general_purpose::STANDARD.encode(&contents);
+        let data_url = format!("data:{};base64,{}", mime_type, base64_str);
+
+        images.push(ImageAttachment {
+            data_url,
+            mime_type: mime_type.to_string(),
+            base64: base64_str,
+        });
+    }
+
+    Ok(images)
+}
+
 fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(false);
@@ -1202,6 +1437,29 @@ pub fn run() {
                 ocr_shortcut: Mutex::new("Alt+O".to_string()),
             });
 
+            app.manage(DialogState {
+                is_open: std::sync::Mutex::new(false),
+            });
+
+            // Initialize SQLite database for notes
+            let app_data_dir = app.path().app_data_dir().map_err(|e| format!("Failed to get app data dir: {}", e))?;
+            std::fs::create_dir_all(&app_data_dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
+            let db_path = app_data_dir.join("gquick.db");
+            let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )",
+                [],
+            ).map_err(|e| format!("Failed to create notes table: {}", e))?;
+            app.manage(DbState {
+                conn: Mutex::new(conn),
+            });
+
             let screenshot_shortcut = parse_shortcut("Alt+S").map_err(|e| format!("Failed to parse screenshot shortcut: {}", e))?;
             app.global_shortcut().register(screenshot_shortcut)?;
 
@@ -1212,21 +1470,31 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                let _ = window.hide();
-                let _ = window.emit("window-hidden", ());
-                api.prevent_close();
+                if window.label() == "selector" {
+                    // Allow selector window to close normally
+                } else {
+                    let _ = window.hide();
+                    let _ = window.emit("window-hidden", ());
+                    api.prevent_close();
+                }
             }
             tauri::WindowEvent::Focused(false) => {
                 if window.label() == "selector" {
                     let _ = window.close();
                 } else {
-                    let _ = window.hide();
-                    let _ = window.emit("window-hidden", ());
+                    // Check if a dialog is open - don't hide window in that case
+                    let app_handle = window.app_handle();
+                    let dialog_state = app_handle.state::<DialogState>();
+                    let is_dialog_open = *dialog_state.is_open.lock().unwrap();
+                    if !is_dialog_open {
+                        let _ = window.hide();
+                        let _ = window.emit("window-hidden", ());
+                    }
                 }
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![greet, list_apps, list_containers, list_images, delete_image, manage_container, open_app, capture_region, search_files, smart_search_files, open_file, update_main_shortcut, update_screenshot_shortcut, update_ocr_shortcut])
+        .invoke_handler(tauri::generate_handler![greet, list_apps, list_containers, list_images, delete_image, manage_container, open_app, capture_region, search_files, smart_search_files, open_file, update_main_shortcut, update_screenshot_shortcut, update_ocr_shortcut, open_image_dialog, close_selector, create_note, get_notes, update_note, delete_note, search_notes, get_note_by_id])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

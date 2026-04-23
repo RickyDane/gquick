@@ -35,3 +35,5 @@ walkdir = "2"
 fuzzy-matcher = "0.3"
 chrono = "0.4"
 dirs = "5"
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }

@@ -84,6 +84,7 @@ jobs:
             libpipewire-0.3-dev \
             libwayland-dev \
             libegl-dev \
+            libgbm-dev \
             libtesseract-dev \
             libleptonica-dev \
             libclang-dev \
@@ -117,6 +118,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PKG_CONFIG_ALLOW_CROSS: 1
 
       # ------------------------------------------------------------------
       # Upload artifacts (CI builds)

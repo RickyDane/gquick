@@ -272,7 +272,7 @@ fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
 }
 
 fn run_ocr(app: &tauri::AppHandle, path: &str) -> String {
-    let data_path = {
+    let data_path: Option<String> = {
         #[cfg(target_os = "macos")]
         {
             tesseract_data_path(app)

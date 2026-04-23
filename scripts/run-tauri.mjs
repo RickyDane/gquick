@@ -29,6 +29,7 @@ const bin =
 const result = spawnSync(bin, process.argv.slice(2), {
   stdio: "inherit",
   env,
+  shell: process.platform === "win32",
 });
 
 if (result.error) {

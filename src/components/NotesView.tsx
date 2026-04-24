@@ -173,7 +173,7 @@ export function NotesView({ onClose }: NotesViewProps) {
               </div>
               <button
                 onClick={startCreate}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
               >
                 <Plus className="h-3 w-3" />
                 New
@@ -183,7 +183,7 @@ export function NotesView({ onClose }: NotesViewProps) {
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1.5 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="p-1.5 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
@@ -211,7 +211,7 @@ export function NotesView({ onClose }: NotesViewProps) {
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={cancelEdit}
-                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-colors border border-white/10"
+                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-colors border border-white/10 cursor-pointer"
               >
                 <X className="h-3 w-3" />
                 Cancel
@@ -219,7 +219,7 @@ export function NotesView({ onClose }: NotesViewProps) {
               <button
                 onClick={handleSave}
                 disabled={!editTitle.trim() && !editContent.trim()}
-                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-colors"
+                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
               >
                 <Save className="h-3 w-3" />
                 {editingNote ? "Update" : "Save"}
@@ -262,7 +262,7 @@ export function NotesView({ onClose }: NotesViewProps) {
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                     <button
                       onClick={() => handleCopy(note)}
-                      className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
+                      className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
                       title="Copy content"
                     >
                       {copiedId === note.id ? (
@@ -273,14 +273,14 @@ export function NotesView({ onClose }: NotesViewProps) {
                     </button>
                     <button
                       onClick={() => startEdit(note)}
-                      className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
+                      className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
                       title="Edit note"
                     >
                       <Edit2 className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={() => handleDelete(note.id)}
-                      className="p-1.5 hover:bg-red-500/10 rounded-lg text-zinc-400 hover:text-red-400 transition-colors"
+                      className="p-1.5 hover:bg-red-500/10 rounded-lg text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
                       title="Delete note"
                     >
                       <Trash2 className="h-3.5 w-3.5" />

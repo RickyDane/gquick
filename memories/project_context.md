@@ -163,7 +163,7 @@ If OCR mode: runs Tesseract OCR → copies text to clipboard + emits ocr-complet
 
 ### AI Chat Flow (Real — Not Mocked)
 ```
-User switches to chat view (⌘ Left Shift C / Ctrl Left Shift C or Actions menu)
+User switches to chat view (Cmd/Ctrl + Left Shift + C or Actions menu)
     ↓
 App.tsx renders chat UI with message history
     ↓
@@ -275,7 +275,7 @@ AI responds with note-aware answer
 | `Alt + S` | Open region selector (screenshot mode) | Yes (via Settings) |
 | `Alt + O` | Open region selector (OCR mode) | Yes (via Settings) |
 | `⌘K` / `Ctrl+K` | Toggle actions overlay | No |
-| `⌘ Left Shift C` / `Ctrl+Left Shift+C` | Switch to chat view | No |
+| `Cmd/Ctrl + Left Shift + C` | Switch to chat view; action palette displays `L⇧ C` | No |
 | `⌘,` / `Ctrl+,` | Open settings | No |
 | `⌘R` / `Ctrl+R` | Clear chat (in chat view) | No |
 | `⌘N` / `Ctrl+N` | Open notes view | No |

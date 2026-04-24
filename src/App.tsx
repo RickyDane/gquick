@@ -24,9 +24,9 @@ function isLeftShiftKeyEvent(e: KeyboardEvent): boolean {
   return e.key === "Shift" && (e.code === "ShiftLeft" || e.location === LEFT_KEY_LOCATION);
 }
 
-function isChatShortcut(e: KeyboardEvent): boolean {
+function isChatShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean {
   const isCKey = e.code === "KeyC" || e.key.toLowerCase() === "c";
-  return (e.metaKey || e.ctrlKey) && !e.shiftKey && isCKey;
+  return (e.metaKey || e.ctrlKey) && e.shiftKey && isLeftShiftPressed && isCKey;
 }
 
 function isDockerShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean {
@@ -245,6 +245,29 @@ function App() {
     };
   }, []);
 
+  // Focus search input when window is shown and on initial mount
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+
+    const focusInput = () => {
+      // Small delay to ensure the webview is ready to receive focus
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+    };
+
+    const setupListener = async () => {
+      unlisten = await listen("window-shown", focusInput);
+    };
+
+    setupListener();
+    focusInput(); // Also focus on initial mount
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const processImageFiles = useCallback(async (files: File[]) => {
     const imageFiles = files.filter(f =>
       f.type.startsWith("image/") &&
@@ -325,7 +348,7 @@ function App() {
         setView(prev => prev === "actions" ? "search" : "actions");
       }
 
-      if (isChatShortcut(e) && view !== "actions") {
+      if (isChatShortcut(e, isLeftShiftPressedRef.current) && view !== "actions") {
          e.preventDefault();
          setView("chat");
       }
@@ -496,7 +519,7 @@ function App() {
   const totalItems = items.length;
 
   const appActions = [
-    { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} C`, onClick: () => setView("chat") },
+    { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} L⇧ C`, onClick: () => setView("chat") },
     { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => setView("notes") },
     { id: "docker", label: "Docker", icon: Box, shortcut: `${modKey} L⇧ D`, onClick: () => { setDockerInitialImage(null); setView("docker"); } },
     { id: "search-notes", label: "Search Notes", icon: Search, shortcut: `${modKey} ⇧ S`, onClick: () => { setView("search"); setQuery("search notes: "); inputRef.current?.focus(); } },
@@ -816,7 +839,7 @@ function App() {
                 setAttachedImages([]);
                 setChatInput("");
               }}
-              className="mr-2 p-1.5 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="mr-2 p-1.5 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
               aria-label="Clear chat"
             >
               <RotateCcw className="h-4 w-4" />
@@ -870,7 +893,7 @@ function App() {
                 }
               }}
               disabled={isLoading || attachedImages.length >= 5}
-              className="p-1.5 hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+              className="p-1.5 hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors mr-1 cursor-pointer"
               aria-label="Attach image"
             >
               <ImagePlus className="h-4 w-4" />
@@ -878,7 +901,7 @@ function App() {
             <button
               onClick={handleSendMessage}
               disabled={isLoading || (!chatInput.trim() && attachedImages.length === 0)}
-              className="p-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white transition-colors"
+              className="p-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white transition-colors cursor-pointer"
             >
               <Send className="h-4 w-4" />
             </button>
@@ -908,7 +931,7 @@ function App() {
               />
               <button
                 onClick={() => removeAttachedImage(idx)}
-                className="absolute -top-1.5 -right-1.5 h-4 w-4 flex items-center justify-center bg-zinc-900 border border-white/20 rounded-full hover:bg-zinc-800 hover:border-white/40 transition-colors"
+                className="absolute -top-1.5 -right-1.5 h-4 w-4 flex items-center justify-center bg-zinc-900 border border-white/20 rounded-full hover:bg-zinc-800 hover:border-white/40 transition-colors cursor-pointer"
                 aria-label="Remove image"
               >
                 <X className="h-2.5 w-2.5 text-zinc-400" />

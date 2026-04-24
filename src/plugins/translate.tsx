@@ -168,7 +168,7 @@ function TranslateView({ initialText = "" }: TranslateViewProps) {
         <button
           onClick={handleSwapLanguages}
           disabled={sourceLang === "auto"}
-          className="mt-5 p-2 rounded-lg bg-zinc-800 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          className="mt-5 p-2 rounded-lg bg-zinc-800 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
           title="Swap languages"
         >
           <ArrowRight className="h-4 w-4 rotate-90" />

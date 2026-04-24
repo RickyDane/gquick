@@ -174,7 +174,7 @@ sequenceDiagram
     participant Stream as streaming.ts
     participant API as AI Provider API
 
-    User->>App: Press ⌘ Left Shift C
+    User->>App: Press Cmd/Ctrl + Left Shift + C
     App->>App: setView("chat")
     App->>App: Render chat UI
 

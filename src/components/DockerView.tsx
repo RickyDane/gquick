@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, KeyboardEvent, MouseEvent, ReactNode, SetStateAction } from "react";
+import type { Dispatch, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FileCode2, Loader2, Play, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { searchDockerHub, DockerHubResult } from "../utils/dockerHub";
@@ -76,6 +76,19 @@ type ContextMenuState =
   | { type: "background"; x: number; y: number };
 
 const defaultCompose = `services:\n  app:\n    image: nginx:latest\n    ports:\n      - "8080:80"\n`;
+const detailPanelWidthKey = "docker-detail-panel-width";
+const defaultDetailPanelWidth = 320;
+const minDetailPanelWidth = 240;
+const maxDetailPanelWidth = 640;
+
+function clampDetailPanelWidth(width: number, viewportWidth = window.innerWidth): number {
+  return Math.round(Math.min(Math.max(width, minDetailPanelWidth), Math.min(maxDetailPanelWidth, Math.max(minDetailPanelWidth, viewportWidth - 180))));
+}
+
+function initialDetailPanelWidth(): number {
+  const savedWidth = Number(localStorage.getItem(detailPanelWidthKey));
+  return clampDetailPanelWidth(Number.isFinite(savedWidth) && savedWidth > 0 ? savedWidth : defaultDetailPanelWidth);
+}
 
 function parseLines(value: string): string[] {
   return value.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -135,6 +148,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<SelectedItem | null>(null);
+  const [detailPanelWidth, setDetailPanelWidth] = useState(initialDetailPanelWidth);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [selectedImageContext, setSelectedImageContext] = useState<DockerInitialImage | null>(null);
   const [output, setOutput] = useState("Ready.");
@@ -199,6 +213,16 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    localStorage.setItem(detailPanelWidthKey, String(detailPanelWidth));
+  }, [detailPanelWidth]);
+
+  useEffect(() => {
+    const clampToViewport = () => setDetailPanelWidth((width) => clampDetailPanelWidth(width));
+    window.addEventListener("resize", clampToViewport);
+    return () => window.removeEventListener("resize", clampToViewport);
+  }, []);
 
   useEffect(() => {
     if (tab !== "hub" || query.trim().length < 2) {
@@ -317,6 +341,38 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
     setContextMenu({ type: "background", x: position.x, y: position.y });
   }
 
+  const resizeDetailPanel = useCallback((nextWidth: number) => {
+    setDetailPanelWidth(clampDetailPanelWidth(nextWidth));
+  }, []);
+
+  const startDetailPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = detailPanelWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      resizeDetailPanel(startWidth + startX - moveEvent.clientX);
+    };
+    const stopResize = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }, [detailPanelWidth, resizeDetailPanel]);
+
   const runContainerAction = useCallback((container: ContainerInfo, action: "start" | "stop" | "restart") => {
     selectContainer(container);
     void runAction(() => invoke("manage_container", { id: container.id, action }), `${action[0].toUpperCase()}${action.slice(1)} ${container.names}`);
@@ -340,17 +396,17 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <span className="hidden text-[11px] text-zinc-500 min-[700px]:inline">⌘/Ctrl ⇧D</span>
-          <button onClick={() => void refresh()} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10"><RefreshCw className="h-3 w-3" /> <span className="hidden min-[520px]:inline">Refresh</span></button>
-          {onClose && <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/5"><X className="h-4 w-4" /></button>}
+          <button onClick={() => void refresh()} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10 cursor-pointer"><RefreshCw className="h-3 w-3" /> <span className="hidden min-[520px]:inline">Refresh</span></button>
+          {onClose && <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/5 cursor-pointer"><X className="h-4 w-4" /></button>}
         </div>
       </div>
 
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="w-24 shrink-0 border-r border-white/5 p-2 min-[620px]:w-32">
           {(["containers", "images", "hub", "compose", "activity"] as Tab[]).map((item) => (
-            <button key={item} onClick={() => setTab(item)} className={cn("mb-1 w-full truncate rounded-lg px-2 py-2 text-left text-xs capitalize", tab === item ? "bg-white/10 text-white" : "text-zinc-400 hover:bg-white/5")}>{item}</button>
+            <button key={item} onClick={() => setTab(item)} className={cn("mb-1 w-full truncate rounded-lg px-2 py-2 text-left text-xs capitalize cursor-pointer", tab === item ? "bg-white/10 text-white" : "text-zinc-400 hover:bg-white/5")}>{item}</button>
           ))}
-          <button onClick={pruneSystem} className="mt-4 inline-flex w-full items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-2 text-left text-xs text-red-300 hover:bg-red-500/20"><Trash2 className="h-3 w-3 shrink-0" /> <span className="truncate">Prune</span></button>
+          <button onClick={pruneSystem} className="mt-4 inline-flex w-full items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-2 text-left text-xs text-red-300 hover:bg-red-500/20 cursor-pointer"><Trash2 className="h-3 w-3 shrink-0" /> <span className="truncate">Prune</span></button>
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden p-3 pb-12" onContextMenu={openBackgroundMenu}>
@@ -383,7 +439,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
           )}
         </div>
 
-        <DetailDrawer selected={selected} busy={busy} output={output} onClose={() => setSelected(null)} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onDelete={deleteSelected} />
+        <DetailDrawer selected={selected} width={detailPanelWidth} busy={busy} output={output} onClose={() => setSelected(null)} onResizeStart={startDetailPanelResize} onResize={(width) => resizeDetailPanel(width)} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onDelete={deleteSelected} />
         <DockerContextMenu menu={contextMenu} busy={busy} dockerAvailable={Boolean(status?.cli_installed && status.daemon_running)} onClose={() => setContextMenu(null)} onContainerAction={runContainerAction} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onRemove={(container) => deleteSelected(container.id, "container")} onRefresh={() => void refresh()} onSearch={() => searchInputRef.current?.focus()} onPrune={pruneSystem} />
       </div>
     </div>
@@ -399,7 +455,7 @@ function SelectedImageCard({ image, onClear }: { image: DockerInitialImage; onCl
         {image.description && <div className="line-clamp-2 text-cyan-100/70">{image.description}</div>}
         {image.source === "hub" && <div className="text-cyan-100/60">{(image.stars ?? 0).toLocaleString()} stars • {(image.pulls ?? 0).toLocaleString()} pulls</div>}
       </div>
-      <button onClick={onClear} className="shrink-0 rounded p-1 text-cyan-100/70 hover:bg-white/10 hover:text-white" aria-label="Clear selected Docker image"><X className="h-3 w-3" /></button>
+      <button onClick={onClear} className="shrink-0 rounded p-1 text-cyan-100/70 hover:bg-white/10 hover:text-white cursor-pointer" aria-label="Clear selected Docker image"><X className="h-3 w-3" /></button>
     </div>
   </div>;
 }
@@ -427,7 +483,7 @@ function Rows({ items }: { items: { id: string; title: string; subtitle: string;
         <div className="truncate text-sm text-zinc-100">{item.title}</div>
         <div className="truncate text-[11px] text-zinc-500">{item.subtitle}</div>
       </div>
-      {item.onMenuButton && <button onClick={(event) => { event.stopPropagation(); item.onMenuButton?.(event); }} className="shrink-0 rounded-lg px-2 py-1 text-zinc-500 hover:bg-white/10 hover:text-zinc-200" aria-label={`Open menu for ${item.title}`}>⋯</button>}
+      {item.onMenuButton && <button onClick={(event) => { event.stopPropagation(); item.onMenuButton?.(event); }} className="shrink-0 rounded-lg px-2 py-1 text-zinc-500 hover:bg-white/10 hover:text-zinc-200 cursor-pointer" aria-label={`Open menu for ${item.title}`}>⋯</button>}
     </div>;
   })}</div>;
 }
@@ -438,11 +494,11 @@ function HubRows({ repos, onSelect, onPull }: { repos: DockerHubResult[]; onSele
   return <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden pr-1">{repos.map((repo) => {
     const image = dockerHubImageRef(repo);
     return <div key={repo.repositoryName} className="flex min-w-0 items-stretch gap-2 rounded-xl border border-white/5 bg-white/[0.03] p-1.5 hover:bg-white/10">
-      <button onClick={() => onSelect(repo)} className="min-w-0 flex-1 px-2 py-1 text-left" aria-label={`Select Docker Hub image ${image}`}>
+      <button onClick={() => onSelect(repo)} className="min-w-0 flex-1 px-2 py-1 text-left cursor-pointer" aria-label={`Select Docker Hub image ${image}`}>
         <div className="truncate text-sm text-zinc-100">{repo.repositoryName}</div>
         <div className="truncate text-[11px] text-zinc-500">{repo.starCount.toLocaleString()} stars • {repo.pullCount.toLocaleString()} pulls • {repo.description}</div>
       </button>
-      <button onClick={() => onPull(repo)} className="shrink-0 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-2 text-xs text-cyan-100 hover:bg-cyan-500/20" aria-label={`Pull Docker Hub image ${image}`}>Pull</button>
+      <button onClick={() => onPull(repo)} className="shrink-0 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-2 text-xs text-cyan-100 hover:bg-cyan-500/20 cursor-pointer" aria-label={`Pull Docker Hub image ${image}`}>Pull</button>
     </div>;
   })}</div>;
 }
@@ -468,7 +524,7 @@ function RunPanel({ runForm, setRunForm, onRun }: { runForm: RunForm; setRunForm
         <label className="inline-flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" checked={runForm.detached} onChange={(e) => setRunForm((p) => ({ ...p, detached: e.target.checked }))} /> Detached</label>
         <label className="inline-flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" checked={runForm.interactive} onChange={(e) => setRunForm((p) => ({ ...p, interactive: e.target.checked }))} /> Interactive</label>
       </div>
-      <button onClick={onRun} disabled={!runForm.image.trim()} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs text-white disabled:opacity-40">Run</button>
+      <button onClick={onRun} disabled={!runForm.image.trim()} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs text-white disabled:opacity-40 cursor-pointer">Run</button>
     </div>
   </div>;
 }
@@ -480,10 +536,10 @@ function ComposePanel({ path, content, output, setPath, setContent, onRead, onWr
     <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/docker-compose.yml" className="w-full min-w-0 rounded-xl border border-white/10 bg-zinc-950/60 px-3 py-2 text-xs outline-none" />
     <textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-0 w-full min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-zinc-950/70 p-3 font-mono text-xs outline-none" />
     <div className="flex min-w-0 flex-wrap gap-2 overflow-hidden">
-      <button onClick={onRead} className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20"><FileCode2 className="h-3 w-3" /> Read</button>
-      <button onClick={onWrite} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20">Save</button>
-      {composeActions.map((action) => <button key={action} onClick={() => onAction(action, false)} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs capitalize hover:bg-white/20">{action}</button>)}
-      <button onClick={() => onAction("down", true)} className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20">Down -v</button>
+      <button onClick={onRead} className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20 cursor-pointer"><FileCode2 className="h-3 w-3" /> Read</button>
+      <button onClick={onWrite} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20 cursor-pointer">Save</button>
+      {composeActions.map((action) => <button key={action} onClick={() => onAction(action, false)} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs capitalize hover:bg-white/20 cursor-pointer">{action}</button>)}
+      <button onClick={() => onAction("down", true)} className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 cursor-pointer">Down -v</button>
     </div>
     {output && <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-zinc-950 p-2 text-[11px] text-zinc-400">{output}</pre>}
   </div>;
@@ -559,14 +615,23 @@ function MenuShell({ x, y, children }: { x: number; y: number; children: ReactNo
 }
 
 function MenuItem({ label, disabled, destructive, onSelect }: { label: string; disabled?: boolean; destructive?: boolean; onSelect: () => void }) {
-  return <button role="menuitem" aria-disabled={disabled || undefined} disabled={disabled} onClick={onSelect} className={cn("block w-full rounded-lg px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40", destructive ? "text-red-300 hover:bg-red-500/10" : "hover:bg-white/10")}>{label}</button>;
+  return <button role="menuitem" aria-disabled={disabled || undefined} disabled={disabled} onClick={onSelect} className={cn("block w-full rounded-lg px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer", destructive ? "text-red-300 hover:bg-red-500/10" : "hover:bg-white/10")}>{label}</button>;
 }
 
 function MenuSeparator() {
   return <div role="separator" className="my-1 h-px bg-white/10" />;
 }
 
-function DetailDrawer({ selected, busy, output, onClose, onLogs, onExec, onInspect, onDelete }: { selected: { type: "container" | "image"; id: string; label: string } | null; busy: boolean; output: string; onClose: () => void; onLogs: (id: string) => void; onExec: (id: string) => void; onInspect: (id: string) => void; onDelete: (id: string, type: "container" | "image") => void }) {
+function DetailDrawer({ selected, width, busy, output, onClose, onResizeStart, onResize, onLogs, onExec, onInspect, onDelete }: { selected: { type: "container" | "image"; id: string; label: string } | null; width: number; busy: boolean; output: string; onClose: () => void; onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void; onResize: (width: number) => void; onLogs: (id: string) => void; onExec: (id: string) => void; onInspect: (id: string) => void; onDelete: (id: string, type: "container" | "image") => void }) {
   if (!selected) return null;
-  return <div className="absolute inset-y-0 right-0 z-10 flex w-[min(20rem,70%)] min-w-0 flex-col border-l border-white/5 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur"><div className="mb-3 flex min-w-0 items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-100">{selected.label}</div><div className="truncate text-[11px] text-zinc-500">{selected.type} • {selected.id}</div></div><button onClick={onClose} className="shrink-0 rounded p-1 text-zinc-500 hover:bg-white/5"><X className="h-3 w-3" /></button></div><div className="mb-3 flex min-w-0 flex-wrap gap-2">{selected.type === "container" && <><button onClick={() => onLogs(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Logs</button><button onClick={() => onExec(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20"><Terminal className="inline h-3 w-3" /> Exec</button></>}<button onClick={() => onInspect(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Inspect</button><button onClick={() => onDelete(selected.id, selected.type)} className="rounded-lg bg-red-500/10 px-2 py-1 text-xs text-red-300 hover:bg-red-500/20">Delete</button></div><pre className="min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-zinc-950 p-2 text-[11px] text-zinc-400">{busy ? "Working..." : output}</pre><p className="mt-2 text-[10px] text-zinc-600">Exec shell is non-interactive because no PTY bridge is available.</p></div>;
+  const resizeByKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+
+    event.preventDefault();
+    if (event.key === "Home") onResize(minDetailPanelWidth);
+    else if (event.key === "End") onResize(maxDetailPanelWidth);
+    else onResize(width + (event.key === "ArrowLeft" ? 16 : -16));
+  };
+
+  return <div className="absolute inset-y-0 right-0 z-10 flex min-w-0 flex-col border-l border-white/5 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur" style={{ width }}><div role="separator" tabIndex={0} aria-orientation="vertical" aria-label="Resize Docker detail panel" aria-valuemin={minDetailPanelWidth} aria-valuemax={maxDetailPanelWidth} aria-valuenow={width} onPointerDown={onResizeStart} onKeyDown={resizeByKeyboard} className="absolute inset-y-0 -left-1.5 w-3 cursor-col-resize outline-none before:absolute before:inset-y-3 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-white/10 hover:before:bg-cyan-400/60 focus-visible:before:bg-cyan-400" /><div className="mb-3 flex min-w-0 items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-100">{selected.label}</div><div className="truncate text-[11px] text-zinc-500">{selected.type} • {selected.id}</div></div><button onClick={onClose} className="shrink-0 rounded p-1 text-zinc-500 hover:bg-white/5 cursor-pointer"><X className="h-3 w-3" /></button></div><div className="mb-3 flex min-w-0 flex-wrap gap-2">{selected.type === "container" && <><button onClick={() => onLogs(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Logs</button><button onClick={() => onExec(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20"><Terminal className="inline h-3 w-3" /> Exec</button></>}<button onClick={() => onInspect(selected.id)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Inspect</button><button onClick={() => onDelete(selected.id, selected.type)} className="rounded-lg bg-red-500/10 px-2 py-1 text-xs text-red-300 hover:bg-red-500/20">Delete</button></div><pre className="min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-zinc-950 p-2 text-[11px] text-zinc-400">{busy ? "Working..." : output}</pre><p className="mt-2 text-[10px] text-zinc-600">Exec shell is non-interactive because no PTY bridge is available.</p></div>;
 }

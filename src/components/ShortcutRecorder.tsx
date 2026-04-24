@@ -107,7 +107,7 @@ export default function ShortcutRecorder({
     <div ref={containerRef} className="w-full">
       <button
         onClick={() => setIsRecording(!isRecording)}
-        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm border transition-all ${
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm border transition-all cursor-pointer ${
           isRecording
             ? "bg-blue-500/20 border-blue-500/50 text-blue-400 ring-1 ring-blue-500/30"
             : "bg-zinc-800 border-white/10 text-zinc-200 hover:border-white/20"

@@ -1,20 +1,38 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote } from "lucide-react";
+import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box } from "lucide-react";
 import { cn } from "./utils/cn";
 import { plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
 import Settings from "./Settings";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
+import { DockerView, type DockerInitialImage } from "./components/DockerView";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
 import { streamOpenAI, streamGemini, streamAnthropic } from "./utils/streaming";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
+const LEFT_KEY_LOCATION = 1;
+const LAUNCHER_WINDOW_SIZE = { width: 760, height: 800 };
+const DOCKER_WINDOW_SIZE = { width: 1200, height: 860 };
+
+function isLeftShiftKeyEvent(e: KeyboardEvent): boolean {
+  return e.key === "Shift" && (e.code === "ShiftLeft" || e.location === LEFT_KEY_LOCATION);
+}
+
+function isChatShortcut(e: KeyboardEvent): boolean {
+  const isCKey = e.code === "KeyC" || e.key.toLowerCase() === "c";
+  return (e.metaKey || e.ctrlKey) && !e.shiftKey && isCKey;
+}
+
+function isDockerShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean {
+  const isDKey = e.code === "KeyD" || e.key.toLowerCase() === "d";
+  return (e.metaKey || e.ctrlKey) && e.shiftKey && isLeftShiftPressed && isDKey;
+}
 
 function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
   const parts = shortcut.split("+");
@@ -62,11 +80,12 @@ interface Message {
 function App() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [view, setView] = useState<"search" | "chat" | "settings" | "actions" | "notes">("search");
+  const [view, setView] = useState<"search" | "chat" | "settings" | "actions" | "notes" | "docker">("search");
   const [activeActionIndex, setActiveActionIndex] = useState(0);
   const [items, setItems] = useState<SearchResultItem[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const actionsScrollRef = useRef<HTMLDivElement>(null);
+  const isLeftShiftPressedRef = useRef(false);
 
   // Chat State
   const [messages, setMessages] = useState<Message[]>([
@@ -80,6 +99,8 @@ function App() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
+  const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
+  const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
 
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
@@ -118,7 +139,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== "settings" && view !== "actions" && view !== "notes") {
+    if (view !== "settings" && view !== "actions" && view !== "notes" && view !== "docker") {
       inputRef.current?.focus();
     }
   }, [view]);
@@ -162,6 +183,41 @@ function App() {
     return () => window.removeEventListener("gquick-open-notes", handleOpenNotes);
   }, []);
 
+  useEffect(() => {
+    const handleOpenDocker = (event: Event) => {
+      const detail = (event as CustomEvent<DockerInitialImage | undefined>).detail;
+      setDockerInitialImage(detail ?? null);
+      setView("docker");
+    };
+    window.addEventListener("gquick-open-docker", handleOpenDocker);
+    return () => window.removeEventListener("gquick-open-docker", handleOpenDocker);
+  }, []);
+
+  useEffect(() => {
+    const mode = view === "docker" ? "docker" : "launcher";
+    if (appliedWindowModeRef.current === mode) return;
+    appliedWindowModeRef.current = mode;
+
+    const resizeWindow = async () => {
+      const size = mode === "docker" ? DOCKER_WINDOW_SIZE : LAUNCHER_WINDOW_SIZE;
+      const appWindow = getCurrentWindow();
+      try {
+        await appWindow.setSize(new LogicalSize(size.width, size.height));
+        await appWindow.center();
+      } catch (error) {
+        console.error("Failed to resize window:", error);
+      }
+    };
+
+    void resizeWindow();
+  }, [view]);
+
+  useEffect(() => {
+    const root = document.getElementById("root");
+    root?.classList.toggle("gquick-docker-root", view === "docker");
+    return () => root?.classList.remove("gquick-docker-root");
+  }, [view]);
+
   // Reset to idle search state when window is hidden
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -174,6 +230,7 @@ function App() {
         setActiveActionIndex(0);
         setChatInput("");
         setItems([]);
+        setDockerInitialImage(null);
         setIsTranslating(false);
         setIsSearching(false);
         setAttachedImages([]);
@@ -259,14 +316,27 @@ function App() {
   // Global Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isLeftShiftKeyEvent(e)) {
+        isLeftShiftPressedRef.current = true;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setView(prev => prev === "actions" ? "search" : "actions");
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key === "c" && view !== "actions") {
+      if (isChatShortcut(e) && view !== "actions") {
          e.preventDefault();
          setView("chat");
+      }
+
+      if (isDockerShortcut(e, isLeftShiftPressedRef.current) && view !== "actions") {
+        e.preventDefault();
+        setDockerInitialImage(null);
+        setView(prev => prev === "docker" ? "search" : "docker");
+        setQuery("");
+        setChatInput("");
+        setNotesContext(null);
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === "n" && view !== "actions") {
@@ -328,8 +398,23 @@ function App() {
         }
       }
     };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (isLeftShiftKeyEvent(e)) {
+        isLeftShiftPressedRef.current = false;
+      }
+    };
+    const resetLeftShift = () => {
+      isLeftShiftPressedRef.current = false;
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", resetLeftShift);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", resetLeftShift);
+    };
   }, [view, attachedImages]);
 
   // Fetch items from plugins
@@ -413,6 +498,7 @@ function App() {
   const appActions = [
     { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} C`, onClick: () => setView("chat") },
     { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => setView("notes") },
+    { id: "docker", label: "Docker", icon: Box, shortcut: `${modKey} L⇧ D`, onClick: () => { setDockerInitialImage(null); setView("docker"); } },
     { id: "search-notes", label: "Search Notes", icon: Search, shortcut: `${modKey} ⇧ S`, onClick: () => { setView("search"); setQuery("search notes: "); inputRef.current?.focus(); } },
     { id: "settings", label: "Settings", icon: SettingsIcon, shortcut: `${modKey},`, onClick: () => setView("settings") },
   ];
@@ -700,7 +786,12 @@ function App() {
   }, [chatInput, isLoading, messages, attachedImages, isNoteRelatedQuery, fetchNotesContext]);
 
   return (
-    <div className="w-[680px] rounded-2xl border border-white/10 bg-zinc-900/95 shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] backdrop-blur-3xl transition-all duration-200 ring-1 ring-white/10 flex flex-col relative overflow-hidden">
+    <div className={cn(
+      "flex max-h-[calc(100vh-24px)] max-w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 ring-1 ring-white/10 backdrop-blur-3xl transition-all duration-200 relative",
+      view === "docker"
+        ? "h-[calc(100vh-24px)] w-300 shadow-none"
+        : "w-[min(680px,calc(100vw-24px))] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)]"
+    )}>
       <div className="flex items-center px-4 py-4 border-b border-white/5">
         {view === "settings" ? (
           <SettingsIcon className="mr-3 h-5 w-5 text-zinc-400" />
@@ -710,6 +801,8 @@ function App() {
           <Search className="mr-3 h-5 w-5 text-zinc-400" />
         ) : view === "notes" ? (
           <StickyNote className="mr-3 h-5 w-5 text-amber-400" />
+        ) : view === "docker" ? (
+          <Box className="mr-3 h-5 w-5 text-cyan-400" />
         ) : (
           <MessageSquare className="mr-3 h-5 w-5 text-blue-400" />
         )}
@@ -752,10 +845,10 @@ function App() {
             if (view === "chat" && e.key === "Enter") handleSendMessage();
             else handleKeyDown(e);
           }}
-          disabled={view === "settings" || view === "notes"}
+          disabled={view === "settings" || view === "notes" || view === "docker"}
           readOnly={view === "actions"}
-          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Notes" : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
-          className="flex-1 bg-transparent text-lg text-zinc-100 placeholder-zinc-500 outline-none disabled:opacity-50 read-only:opacity-50"
+          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Notes" : view === "docker" ? "Docker" : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
+          className="min-w-0 flex-1 bg-transparent text-lg text-zinc-100 placeholder-zinc-500 outline-none disabled:opacity-50 read-only:opacity-50"
           spellCheck={false}
         />
         {view === "chat" ? (
@@ -826,7 +919,7 @@ function App() {
       )}
 
       {(view !== "search" || query) && (
-        <div className="flex-1 overflow-hidden min-h-[40px]">
+        <div className={cn("min-h-[40px] flex-1 overflow-hidden", view === "docker" && "min-h-0")}>
           {view === "settings" ? (
             <Settings onClose={() => setView("search")} />
           ) : view === "actions" ? (
@@ -848,7 +941,7 @@ function App() {
                     onClick={action.onClick}
                   >
                     <div className="flex items-center gap-3">
-                      <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : "text-zinc-400")} />
+                      <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : action.id === "docker" ? "text-cyan-400" : "text-zinc-400")} />
                       <span>{action.label}</span>
                     </div>
                     <span className="text-xs text-zinc-500">{action.shortcut}</span>
@@ -894,6 +987,8 @@ function App() {
           </div>
         ) : view === "notes" ? (
           <NotesView onClose={() => setView("search")} />
+        ) : view === "docker" ? (
+          <DockerView initialImage={dockerInitialImage} onClose={() => setView("search")} />
         ) : view === "chat" ? (
           <div className="flex flex-col h-[300px]">
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
@@ -1046,23 +1141,23 @@ function App() {
       </div>
       )}
 
-      <div className="flex items-center justify-between border-t border-white/5 bg-zinc-950/40 px-4 py-2 text-[11px] text-zinc-500 font-medium">
-        <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/5 bg-zinc-950/40 px-4 py-2 text-[11px] font-medium text-zinc-500">
+        <div className="flex min-w-0 items-center gap-3 overflow-hidden min-[560px]:gap-4">
           <div className="flex items-center gap-1.5 group cursor-pointer hover:text-zinc-300 transition-colors">
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 border border-white/5 font-mono group-hover:bg-zinc-700 transition-colors text-zinc-300">↵</span>
             <span>Open</span>
           </div>
-          <div className="flex items-center gap-1.5 group cursor-pointer hover:text-zinc-300 transition-colors" onClick={() => setView(prev => prev === "actions" ? "search" : "actions")}>
+          <div className="flex min-w-0 items-center gap-1.5 group cursor-pointer hover:text-zinc-300 transition-colors" onClick={() => setView(prev => prev === "actions" ? "search" : "actions")}>
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 border border-white/5 font-mono group-hover:bg-zinc-700 transition-colors text-zinc-300">{modKey}</span>
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 border border-white/5 font-mono group-hover:bg-zinc-700 transition-colors text-zinc-300">K</span>
-            <span>Actions</span>
+            <span className="truncate">Actions</span>
           </div>
         </div>
         <div
-          className="flex items-center gap-2 cursor-pointer hover:text-zinc-300 transition-colors"
-          onClick={() => setView(view === "settings" || view === "actions" || view === "notes" ? "search" : "settings")}
+          className="flex shrink-0 items-center gap-2 cursor-pointer hover:text-zinc-300 transition-colors"
+          onClick={() => setView(view === "settings" || view === "actions" || view === "notes" || view === "docker" ? "search" : "settings")}
         >
-          <span>{view === "chat" ? "Search" : view === "settings" || view === "actions" || view === "notes" ? "Back" : "GQuick"}</span>
+          <span>{view === "chat" ? "Search" : view === "settings" || view === "actions" || view === "notes" || view === "docker" ? "Back" : "GQuick"}</span>
           <SettingsIcon className="h-3.5 w-3.5" />
         </div>
       </div>

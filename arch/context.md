@@ -106,6 +106,7 @@ Located in `src/plugins/`. Each plugin implements `GQuickPlugin` interface:
 - **fileSearch**: Fast filename search + AI-powered smart file search with content reading
 - **calculator**: Evaluates math expressions in search bar
 - **docker**: Manages Docker containers and images with inline actions
+- **docker (target expansion)**: Docker Hub search should use Docker Hub public API from frontend; local image/container/compose operations should remain Rust Tauri commands backed by Docker CLI.
 - **webSearch**: Opens Google search in default browser
 - **translate**: AI-powered translation with quick-translate prefixes (`t:`, `tr:`, `>`) and full translation UI
 - **notes**: Quick capture, search, and full CRUD notes management with SQLite persistence
@@ -162,7 +163,7 @@ If OCR mode: runs Tesseract OCR → copies text to clipboard + emits ocr-complet
 
 ### AI Chat Flow (Real — Not Mocked)
 ```
-User switches to chat view (⌘C or Actions menu)
+User switches to chat view (⌘ Left Shift C / Ctrl Left Shift C or Actions menu)
     ↓
 App.tsx renders chat UI with message history
     ↓
@@ -274,7 +275,7 @@ AI responds with note-aware answer
 | `Alt + S` | Open region selector (screenshot mode) | Yes (via Settings) |
 | `Alt + O` | Open region selector (OCR mode) | Yes (via Settings) |
 | `⌘K` / `Ctrl+K` | Toggle actions overlay | No |
-| `⌘C` / `Ctrl+C` | Switch to chat view | No |
+| `⌘ Left Shift C` / `Ctrl+Left Shift+C` | Switch to chat view | No |
 | `⌘,` / `Ctrl+,` | Open settings | No |
 | `⌘R` / `Ctrl+R` | Clear chat (in chat view) | No |
 | `⌘N` / `Ctrl+N` | Open notes view | No |
@@ -405,6 +406,15 @@ Based on code analysis, the project is in **active development with core feature
 7. **Tesseract for OCR**: Local OCR engine avoids sending screenshots to cloud APIs
 8. **File index caching**: 5-minute TTL balances freshness vs performance
 9. **SQLite via rusqlite for notes persistence**: Notes stored in local SQLite database with `rusqlite` crate for cross-platform persistence without external dependencies
+10. **Docker boundary**: Frontend owns Docker Hub public API search and confirmations; Rust owns local Docker CLI/Compose execution with typed commands, CLI/daemon detection, and structured errors.
+
+## Docker Expansion Notes
+
+- Add dedicated Docker page view opened by `Cmd/Ctrl + Left Shift + D` from `src/App.tsx`.
+- Likely frontend files: `src/App.tsx`, `src/plugins/docker.tsx`, new `src/components/DockerView.tsx` or `src/pages/DockerPage.tsx`, optional `src/utils/dockerHub.ts`.
+- Likely backend file: `src-tauri/src/lib.rs` for `docker_status`, `pull_image`, `run_container`, logs, exec, inspect, prune, and compose commands.
+- Required explicit errors: Docker CLI missing (`CLI_MISSING`) and daemon not running (`DAEMON_DOWN`).
+- Risky operations need confirmation: delete image/container, kill, prune, compose down with volumes, overwrite compose files, privileged/host-network/bind-mount runs, exec interactive shell.
 
 ## Security Notes
 

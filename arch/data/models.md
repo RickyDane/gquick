@@ -100,6 +100,64 @@ struct ImageInfo {
 }
 ```
 
+### Proposed Docker Expansion Types
+
+```typescript
+type DockerErrorCode = "CLI_MISSING" | "DAEMON_DOWN" | "COMMAND_FAILED" | "VALIDATION_FAILED" | "TIMEOUT";
+
+interface DockerError {
+  code: DockerErrorCode;
+  message: string;
+  hint?: string;
+  stderr?: string;
+}
+
+interface DockerStatus {
+  cliInstalled: boolean;
+  daemonRunning: boolean;
+  dockerVersion?: string;
+  composeAvailable: boolean;
+  composeVersion?: string;
+  error?: DockerError;
+}
+
+interface DockerHubResult {
+  name: string;
+  namespace: string;
+  repositoryName: string;
+  description: string;
+  starCount: number;
+  pullCount: number;
+  isOfficial: boolean;
+  isAutomated: boolean;
+}
+
+interface DockerCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface RunContainerOptions {
+  image: string;
+  name?: string;
+  detached: boolean;
+  interactive: boolean;
+  ports: Array<{ host: string; container: string; protocol?: "tcp" | "udp" }>;
+  env: Array<{ key: string; value: string }>;
+  volumes: Array<{ host: string; container: string; readonly?: boolean }>;
+  command?: string[];
+  removeWhenExit?: boolean;
+}
+
+interface ComposeProject {
+  path: string;
+  name?: string;
+  services?: string[];
+  lastUsedAt?: string;
+}
+```
+
 ### File Types (`src-tauri/src/lib.rs`)
 
 ```rust

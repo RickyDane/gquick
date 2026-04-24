@@ -22,11 +22,17 @@ html, body {
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  box-sizing: border-box;
   /* Top padding to position the app slightly above center */
   padding-top: 10vh;
   padding-bottom: 40px;
   padding-left: 40px;
   padding-right: 40px;
+}
+
+#root.gquick-docker-root {
+  align-items: center;
+  padding: 12px;
 }
 
 /* Ensure any default tauri backgrounds are transparent */

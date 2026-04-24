@@ -222,6 +222,78 @@ fn delete_image(id: String) -> Result<(), String>
 
 ---
 
+## Proposed Docker Command Extensions
+
+These commands define the boundary for the Docker expansion. Frontend should send structured options; Rust should execute Docker CLI using argument arrays, never shell-joined strings.
+
+### `docker_status`
+
+```rust
+fn docker_status() -> Result<DockerStatus, String>
+```
+
+Detects Docker CLI and daemon separately. `docker --version` answers CLI presence; `docker info` answers daemon readiness. Missing CLI must map to `CLI_MISSING`; daemon errors must map to `DAEMON_DOWN`.
+
+### `pull_image`
+
+```rust
+fn pull_image(image: String) -> Result<DockerCommandResult, DockerError>
+```
+
+Runs `docker pull <image>`. Validate image reference; return stdout/stderr. Later version can stream progress via Tauri events.
+
+### `run_container`
+
+```rust
+fn run_container(options: RunContainerOptions) -> Result<DockerCommandResult, DockerError>
+```
+
+Maps options to `docker run`: `--detach`, `--interactive`, `--tty` if supported, `--name`, `-p`, `-e`, `-v`, optional command args. Interactive support needs a PTY/event bridge; `Command::output()` only supports detached/non-interactive runs.
+
+### `container_logs`
+
+```rust
+fn container_logs(id: String, tail: Option<u32>, follow: bool) -> Result<String, DockerError>
+```
+
+Runs `docker logs`. `follow=true` should use events or managed child process cleanup.
+
+### `exec_container`
+
+```rust
+fn exec_container(id: String, command: Vec<String>, interactive: bool) -> Result<DockerCommandResult, DockerError>
+```
+
+Runs `docker exec`. Shell shortcuts should resolve to `sh`, `bash`, or `powershell` where available. Interactive shells require PTY support.
+
+### `inspect_docker`
+
+```rust
+fn inspect_docker(target: String) -> Result<serde_json::Value, DockerError>
+```
+
+Runs `docker inspect <target>` and returns parsed JSON.
+
+### `prune_docker`
+
+```rust
+fn prune_docker(kind: PruneKind, include_volumes: bool) -> Result<DockerCommandResult, DockerError>
+```
+
+Runs `docker container|image|volume|system prune -f`. Frontend confirmation required; volumes need extra warning.
+
+### Compose commands
+
+```rust
+fn compose_read_file(path: String) -> Result<String, DockerError>
+fn compose_write_file(path: String, content: String, overwrite: bool) -> Result<(), DockerError>
+fn compose_action(path: String, action: ComposeAction, services: Vec<String>) -> Result<DockerCommandResult, DockerError>
+```
+
+Use `docker compose -f <path> ...`; detect legacy `docker-compose` only as fallback. Existing compose paths can be stored in frontend `localStorage` or backend app data, but Rust file operations must only use explicit user-selected paths.
+
+---
+
 ### `capture_region`
 
 **Status**: Active

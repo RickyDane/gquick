@@ -4,7 +4,9 @@
 graph TB
     subgraph "User Interface Layer"
         A[App.tsx
-        Search + Chat + Actions]
+        Search + Chat + Actions + Docker View Router]
+        DP[DockerPage/DockerView
+        Containers + Images + Compose]
         S[Selector.tsx
         Region Selection]
         ST[Settings.tsx
@@ -15,7 +17,8 @@ graph TB
         P1[App Launcher]
         P2[File Search]
         P3[Calculator]
-        P4[Docker Manager]
+        P4[Docker Plugin
+        Quick search + Hub results]
         P5[Web Search]
         P6[Translate]
     end
@@ -39,7 +42,7 @@ graph TB
         OC[OCR Engine
         tesseract]
         DC[Docker Integration
-        docker CLI]
+        docker CLI + compose]
         AC[App Launcher
         filesystem scan]
         FI[File Index
@@ -58,12 +61,14 @@ graph TB
         SYS5[System Clipboard]
         SYS6[Default Browser]
         SYS7[AI Provider APIs]
+        SYS8[Docker Hub Public API]
     end
 
     A --> P1
     A --> P2
     A --> P3
     A --> P4
+    A --> DP
     A --> P5
     A --> P6
     A --> ST
@@ -73,6 +78,8 @@ graph TB
     P2 --> TC
     P3 --> TC
     P4 --> TC
+    P4 --> SYS8
+    DP --> TC
     P5 --> TC
     P6 --> TC
     P6 --> SYS7

@@ -120,3 +120,11 @@ Single result display → Enter copies to clipboard
 5. **Transparent borderless windows**: Native Spotlight-like feel
 6. **Real AI streaming via SSE**: Responsive chat experience across all providers
 7. **File index with caching**: 5-minute TTL, home directory, max depth 6
+
+## Docker Expansion Guidance
+
+Docker currently uses `src/plugins/docker.tsx` for launcher search/actions and `src-tauri/src/lib.rs` for CLI-backed commands. The expansion should add a dedicated Docker view in `App.tsx` opened by `Cmd/Ctrl + Left Shift + D`, while keeping quick Docker Hub search in the plugin.
+
+Command boundary: frontend calls Docker Hub public API for remote search; Rust executes all local Docker and Docker Compose operations through typed Tauri commands. Rust must detect CLI missing vs daemon down explicitly before local operations.
+
+See `arch/components/docker.md` for command surface, target flow, data models, confirmations, and cross-platform caveats.

@@ -214,39 +214,44 @@ flowchart TD
     Cancel --> End
 ```
 
-## Docker Management Flow
+## Docker Management Flow (Target)
 
 ```mermaid
 flowchart TD
-    Start([Type "docker"]) --> Query[Query Docker Plugin]
-    Query --> ListContainers[invoke list_containers]
-    Query --> ListImages[invoke list_images]
+    Start([Docker entry]) --> Entry{Entry point?}
+    Entry -->|Search query| Plugin[src/plugins/docker.tsx]
+    Entry -->|Cmd/Ctrl + Left Shift + D| Page[DockerPage dedicated view]
 
-    ListContainers --> Parse1[Parse docker ps -a]
-    ListImages --> Parse2[Parse docker images]
+    Plugin --> Hub[Docker Hub public API search]
+    Plugin --> Local[invoke docker_status/list]
+    Page --> Local
 
-    Parse1 --> Filter1[Filter by Query]
-    Parse2 --> Filter2[Filter by Query]
+    Local --> Status{CLI + daemon OK?}
+    Status -->|CLI missing| CliErr[Show install Docker CLI error]
+    Status -->|Daemon down| DaemonErr[Show start Docker daemon error]
+    Status -->|OK| Commands[Run typed Tauri Docker commands]
 
-    Filter1 --> Results1[Container Results]
-    Filter2 --> Results2[Image Results]
+    Hub --> ResultActions[Search result action menu]
+    Commands --> Manage[Images/containers/compose/logs/inspect]
 
-    Results1 --> Render[Render Results]
-    Results2 --> Render
+    ResultActions --> Pull[pull_image]
+    ResultActions --> Run[run_container options]
+    Manage --> Logs[container_logs]
+    Manage --> Exec[exec_container shell]
+    Manage --> Inspect[inspect_docker]
+    Manage --> Prune[prune_docker]
+    Manage --> Compose[compose_read/write/action]
 
-    Render --> Select{User Selects?}
-    Select -->|Container| ContainerAction{Action?}
-    Select -->|Image| ImageAction[Delete Image]
-
-    ContainerAction -->|Start| Start[invoke manage_container start]
-    ContainerAction -->|Stop| Stop[invoke manage_container stop]
-    ContainerAction -->|Restart| Restart[invoke manage_container restart]
-
-    Start --> Refresh[Refresh List]
-    Stop --> Refresh
-    Restart --> Refresh
-    ImageAction --> Refresh
-    Refresh --> Query
+    Pull --> Risk{Risky?}
+    Run --> Risk
+    Exec --> Risk
+    Prune --> Risk
+    Compose --> Risk
+    Risk -->|Yes| Confirm[Frontend confirmation modal]
+    Risk -->|No| Invoke[Tauri invoke]
+    Confirm --> Invoke
+    Invoke --> DockerCLI[Docker CLI / docker compose]
+    DockerCLI --> Refresh[Refresh Docker page/search data]
 ```
 
 ## Smart File Search Flow

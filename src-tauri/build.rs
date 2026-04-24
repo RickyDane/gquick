@@ -15,7 +15,7 @@ fn main() {
             println!("cargo:warning=  - PATH (directory containing tesseract.exe)");
             println!("cargo:warning=  - C:\\Program Files\\Tesseract-OCR");
             println!("cargo:warning=  - C:\\Program Files (x86)\\Tesseract-OCR");
-            println!("cargo:warning=  - VCPKG_ROOT\\installed\\{triplet}\\bin");
+            println!("cargo:warning=  - VCPKG_ROOT\\installed\\{{triplet}}\\bin");
         }
     }
 
@@ -39,7 +39,10 @@ mod windows {
             Some(dir) => dir,
             None => {
                 clean_staged_artifacts(&manifest_dir);
-                return Err("Tesseract DLL directory not found. Install Tesseract or set TESSDATA_PREFIX.".into());
+                return Err(
+                    "Tesseract DLL directory not found. Install Tesseract or set TESSDATA_PREFIX."
+                        .into(),
+                );
             }
         };
 
@@ -191,7 +194,14 @@ mod windows {
         // Known transitive dependencies of Tesseract/Leptonica. If vcpkg's bin/
         // directory is detected, this prevents unrelated DLLs from bloating the bundle.
         let allowed_prefixes = [
-            "tesseract", "leptonica", "libpng", "zlib", "libjpeg", "libtiff", "gif", "webp",
+            "tesseract",
+            "leptonica",
+            "libpng",
+            "zlib",
+            "libjpeg",
+            "libtiff",
+            "gif",
+            "webp",
             "openjp2",
         ];
 

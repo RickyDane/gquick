@@ -26,7 +26,11 @@
     ],
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https: data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: ipc: http://localhost:*"
+      "csp": "default-src 'self'; img-src 'self' asset: https: data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: ipc: http://localhost:*",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPLOCALDATA/app-icons/*"]
+      }
     }
   },
   "bundle": {

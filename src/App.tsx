@@ -999,12 +999,16 @@ function App() {
                           isActive ? "bg-zinc-800 border-white/20 text-white" : "bg-zinc-900 border-white/5 text-zinc-400"
                         )}>
                           {typeof Icon === 'string' ? (
-                            Icon
+                            Icon.match(/^(\/|https?:\/\/|asset:\/\/|data:)/) ? (
+                              <img src={Icon} alt="" className="h-8 w-8 object-contain" />
+                            ) : (
+                              Icon
+                            )
                           ) : React.isValidElement(Icon) ? (
                             Icon
                           ) : (
                             // @ts-ignore - Icon is a LucideIcon component
-                            <Icon className="h-5 w-5" />
+                            <Icon className="h-6 w-6" />
                           )}
                         </div>
                         <div className="flex flex-col flex-1 min-w-0">

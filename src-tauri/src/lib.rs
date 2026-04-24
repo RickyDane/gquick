@@ -410,7 +410,6 @@ fn parse_time_filter(query: &str) -> Option<u64> {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
     app.path()
         .resource_dir()
@@ -421,17 +420,7 @@ fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
 }
 
 fn run_ocr(app: &tauri::AppHandle, path: &str) -> String {
-    let data_path: Option<String> = {
-        #[cfg(target_os = "macos")]
-        {
-            tesseract_data_path(app)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = app;
-            None
-        }
-    };
+    let data_path = tesseract_data_path(app);
 
     match Tesseract::new(data_path.as_deref(), Some("eng")) {
         Ok(tess) => match tess.set_image(path) {
@@ -797,29 +786,253 @@ fn manage_container(id: String, action: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn get_macos_app_icon_path(app_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let plist_path = app_path.join("Contents/Info.plist");
+    if !plist_path.exists() {
+        return None;
+    }
+
+    let output = std::process::Command::new("plutil")
+        .args(["-convert", "json", "-o", "-", plist_path.to_str()?])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+
+    // Check keys in order: CFBundleIconName (modern), CFBundleIconFile, CFBundleIcons
+    let mut icon_name = json
+        .get("CFBundleIconName")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    if icon_name.is_none() {
+        icon_name = json
+            .get("CFBundleIconFile")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+
+    if icon_name.is_none() {
+        if let Some(icons) = json.get("CFBundleIcons") {
+            if let Some(primary) = icons.get("CFBundlePrimaryIcon") {
+                if let Some(files) = primary.get("CFBundleIconFiles") {
+                    if let Some(arr) = files.as_array() {
+                        if let Some(first) = arr.first() {
+                            icon_name = first.as_str().map(|s| s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let icon_name = icon_name?;
+    let resources_dir = app_path.join("Contents/Resources");
+
+    // 1. Try {icon_name}.icns
+    let icns_path = resources_dir.join(format!("{}.icns", icon_name));
+    if icns_path.exists() {
+        return Some(icns_path);
+    }
+
+    // 2. Try as-is (may already have extension)
+    let direct_path = resources_dir.join(&icon_name);
+    if direct_path.exists() && direct_path.is_file() {
+        return Some(direct_path);
+    }
+
+    // 3. Try .appiconset directory
+    let appiconset_path = resources_dir.join(format!("{}.appiconset", icon_name));
+    if appiconset_path.exists() && appiconset_path.is_dir() {
+        let mut png_files: Vec<(std::path::PathBuf, u64)> = std::fs::read_dir(&appiconset_path)
+            .ok()?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.extension()?.to_str()?.eq_ignore_ascii_case("png") {
+                    let size = std::fs::metadata(&path).ok()?.len();
+                    Some((path, size))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort by file size descending and pick the largest
+        png_files.sort_by(|a, b| b.1.cmp(&a.1));
+        return png_files.into_iter().next().map(|(path, _)| path);
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_cache_path(app_path: &std::path::Path, cache_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let app_name = app_path.file_stem()?.to_str()?;
+    let mut hasher = DefaultHasher::new();
+    app_path.hash(&mut hasher);
+    let hash = format!("{:x}", hasher.finish());
+    Some(cache_dir.join(format!("{}_{}.png", app_name, hash)))
+}
+
+#[cfg(target_os = "macos")]
+fn get_swift_extractor() -> Option<&'static std::path::PathBuf> {
+    use std::sync::OnceLock;
+    static SWIFT_EXTRACTOR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+    SWIFT_EXTRACTOR.get_or_init(|| {
+        let cache_dir = dirs::cache_dir()?.join("gquick");
+        let binary_path = cache_dir.join("extract_icon");
+        
+        if binary_path.exists() {
+            return Some(binary_path);
+        }
+
+        std::fs::create_dir_all(&cache_dir).ok()?;
+
+        let swift_source = r#"import Cocoa
+import Foundation
+let args = CommandLine.arguments
+guard args.count >= 3 else { exit(1) }
+let appPath = args[1]
+let outputPath = args[2]
+let icon = NSWorkspace.shared.icon(forFile: appPath)
+icon.size = NSSize(width: 128, height: 128)
+guard let tiffData = icon.tiffRepresentation,
+      let bitmap = NSBitmapImageRep(data: tiffData),
+      let pngData = bitmap.representation(using: .png, properties: [:]) else {
+    exit(1)
+}
+try pngData.write(to: URL(fileURLWithPath: outputPath))
+"#;
+
+        let swift_file = cache_dir.join("extract_icon.swift");
+        std::fs::write(&swift_file, swift_source).ok()?;
+
+        let output = std::process::Command::new("swiftc")
+            .args(["-O", "-o", binary_path.to_str()?, swift_file.to_str()?])
+            .output()
+            .ok()?;
+
+        if output.status.success() && binary_path.exists() {
+            Some(binary_path)
+        } else {
+            None
+        }
+    }).as_ref()
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_app_icon_cached(app_path: &std::path::Path, cache_dir: &std::path::Path) -> Option<String> {
+    // Ensure cache directory exists
+    std::fs::create_dir_all(cache_dir).ok()?;
+
+    let cache_path = get_cache_path(app_path, cache_dir)?;
+
+    // If cache already exists, return it
+    if cache_path.exists() {
+        return Some(cache_path.to_string_lossy().to_string());
+    }
+
+    // Try to find icon source via plist
+    if let Some(source_icon) = get_macos_app_icon_path(app_path) {
+        // If source is PNG, copy directly
+        if source_icon.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("png")) {
+            std::fs::copy(&source_icon, &cache_path).ok()?;
+            if cache_path.exists() {
+                return Some(cache_path.to_string_lossy().to_string());
+            }
+        }
+
+        // If source is ICNS, convert with sips
+        if source_icon.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("icns")) {
+            let output = std::process::Command::new("sips")
+                .args(["-s", "format", "png", source_icon.to_str()?, "--out", cache_path.to_str()?])
+                .output()
+                .ok()?;
+            
+            if output.status.success() && cache_path.exists() {
+                return Some(cache_path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Fallback: use Swift extractor
+    if let Some(extractor) = get_swift_extractor() {
+        let output = std::process::Command::new(extractor)
+            .args([app_path.to_str()?, cache_path.to_str()?])
+            .output()
+            .ok()?;
+
+        if output.status.success() && cache_path.exists() {
+            return Some(cache_path.to_string_lossy().to_string());
+        }
+    }
+
+    None
+}
+
 #[tauri::command]
-fn list_apps() -> Vec<AppInfo> {
+fn list_apps(app: tauri::AppHandle) -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
     #[cfg(target_os = "macos")]
     {
-        let paths = vec!["/Applications", "/System/Applications"];
+        let cache_dir = app
+            .path()
+            .app_local_data_dir()
+            .ok()
+            .map(|dir| dir.join("app-icons"));
+
+        let mut paths = vec![
+            "/Applications".to_string(),
+            "/System/Applications".to_string(),
+        ];
+        if let Ok(home) = std::env::var("HOME") {
+            paths.push(format!("{}/Applications", home));
+        }
+
+        let mut app_entries: Vec<(std::path::PathBuf, String)> = Vec::new();
+
         for path in paths {
-            if let Ok(entries) = std::fs::read_dir(path) {
+            if let Ok(entries) = std::fs::read_dir(&path) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "app") {
+                    if path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("app")) {
                         let name = path
                             .file_stem()
                             .map_or("Unknown".to_string(), |s| s.to_string_lossy().to_string());
-                        apps.push(AppInfo {
-                            name,
-                            path: path.to_string_lossy().to_string(),
-                            icon: None,
-                        });
+                        app_entries.push((path, name));
                     }
                 }
             }
+        }
+
+        // Extract icons in parallel using rayon
+        use rayon::prelude::*;
+        let cache_ref = cache_dir.as_ref();
+        let icons: Vec<Option<String>> = app_entries
+            .par_iter()
+            .map(|(path, _)| {
+                cache_ref.and_then(|dir| ensure_app_icon_cached(path, dir))
+            })
+            .collect();
+
+        // Combine entries with icons
+        for ((path, name), icon) in app_entries.into_iter().zip(icons.into_iter()) {
+            apps.push(AppInfo {
+                name,
+                path: path.to_string_lossy().to_string(),
+                icon,
+            });
         }
     }
 

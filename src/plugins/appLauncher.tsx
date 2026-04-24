@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { AppWindow } from "lucide-react";
 import { GQuickPlugin, SearchResultItem } from "./types";
 
@@ -41,7 +41,7 @@ export const appLauncherPlugin: GQuickPlugin = {
         pluginId: "app-launcher",
         title: app.name,
         subtitle: app.path,
-        icon: AppWindow,
+        icon: app.icon ? convertFileSrc(app.icon) : AppWindow,
         score,
         onSelect: async () => {
           try {

@@ -227,11 +227,46 @@ jobs:
             codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
 
             echo "Submitting DMG for notarization: $dmg"
+            notary_output="$(mktemp)"
+            set +e
             xcrun notarytool submit "$dmg" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_PASSWORD" \
               --team-id "$APPLE_TEAM_ID" \
-              --wait
+              --wait 2>&1 | tee "$notary_output"
+            notary_exit=${PIPESTATUS[0]}
+            set -e
+
+            submission_id="$(sed -nE 's/^[[:space:]]*id:[[:space:]]*([A-Fa-f0-9-]{36}).*/\1/p' "$notary_output" | sed -n '1p')"
+            if [ -n "$submission_id" ]; then
+              echo "Notary submission ID: $submission_id"
+            else
+              echo "::warning::Could not extract notary submission ID from notarytool output."
+            fi
+
+            if [ "$notary_exit" -ne 0 ] || grep -qiE '^[[:space:]]*status:[[:space:]]*Invalid' "$notary_output"; then
+              echo "::error::Apple notarization failed for DMG: $dmg"
+              if [ -n "$submission_id" ]; then
+                echo "Fetching Apple notary log for submission: $submission_id"
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+              fi
+              exit 1
+            fi
+
+            if ! grep -qiE '^[[:space:]]*status:[[:space:]]*Accepted' "$notary_output"; then
+              echo "::error::Apple notarization did not report Accepted status for DMG: $dmg"
+              if [ -n "$submission_id" ]; then
+                echo "Fetching Apple notary log for submission: $submission_id"
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+              fi
+              exit 1
+            fi
 
             echo "Stapling notarization ticket to DMG: $dmg"
             xcrun stapler staple "$dmg"

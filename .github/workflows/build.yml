@@ -106,6 +106,20 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Validate macOS signing certificate
+        if: matrix.os_name == 'macos-arm'
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::error::APPLE_CERTIFICATE is empty. Check the GitHub secret."
+            exit 1
+          fi
+          echo "$APPLE_CERTIFICATE" | base64 -d -o /tmp/certificate.p12
+          if [ ! -s /tmp/certificate.p12 ]; then
+            echo "::error::Decoded certificate is empty. Base64 string may be invalid."
+            exit 1
+          fi
+          echo "Certificate decoded successfully ($(stat -f%z /tmp/certificate.p12) bytes)"
+
       - name: Build Tauri app
         run: npm run tauri -- build --target ${{ matrix.target }}
         env:

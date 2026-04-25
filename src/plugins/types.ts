@@ -71,8 +71,12 @@ export interface SearchResultItem {
 
 export interface GQuickPlugin {
   metadata: PluginMetadata;
+  /** Return false when this plugin should not run for current launcher query. */
+  shouldSearch?: (query: string) => boolean;
   // Optional search debounce for plugins that perform expensive work or API calls.
   searchDebounceMs?: number;
+  /** Optional query-aware debounce; overrides searchDebounceMs when defined. */
+  getSearchDebounceMs?: (query: string) => number | undefined;
   // Returns items based on query
   getItems: (query: string) => Promise<SearchResultItem[]>;
   /** Optional tools this plugin exposes for AI chat */

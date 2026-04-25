@@ -51,6 +51,8 @@ graph TB
         menu + icon]
         CL[Clipboard Manager
         text + image]
+        FR[Focus Restore
+        previous app/window]
     end
 
     subgraph "System Layer"
@@ -62,6 +64,7 @@ graph TB
         SYS6[Default Browser]
         SYS7[AI Provider APIs]
         SYS8[Docker Hub Public API]
+        SYS9[OS Window Manager]
     end
 
     A --> P1
@@ -97,6 +100,7 @@ graph TB
     RC --> FI
     RC --> TR
     RC --> CL
+    RC --> FR
 
     SC --> SYS3
     SC --> SYS4
@@ -106,6 +110,7 @@ graph TB
     CL --> SYS5
     P5 --> SYS6
     FI --> SYS4
+    FR --> SYS9
 
     TR --> GS
     WM --> A
@@ -170,6 +175,7 @@ graph TB
         FI[File Index
         walkdir]
         CM[Clipboard Manager]
+        FR[Focus Restore]
     end
 
     M --> A
@@ -210,6 +216,7 @@ graph TB
     CH --> AL
     CH --> FI
     CH --> CM
+    CH --> FR
 ```
 
 ## Deployment Architecture

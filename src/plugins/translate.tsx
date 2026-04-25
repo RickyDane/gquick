@@ -271,6 +271,10 @@ export const translatePlugin: GQuickPlugin = {
     keywords: ["translate", "translation", "language", "convert text"],
     queryPrefixes: ["translate:", /^\/translate(?:$|\s)/i],
   },
+  shouldSearch: (query: string) => {
+    const trimmed = query.trim().toLowerCase();
+    return trimmed.startsWith("translate:") || /^\/translate(?:$|\s)/i.test(trimmed) || trimmed === "translate" || trimmed === "translation";
+  },
   searchDebounceMs: 150,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmed = query.trim().toLowerCase();

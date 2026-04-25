@@ -85,6 +85,7 @@ export const networkInfoPlugin: GQuickPlugin = {
     keywords: ["net", "network", "ip", "wifi", "vpn", "ping", "latency"],
     queryPrefixes: [/^(net|network)(:|\b)/i, /^(wifi|wi-fi|vpn)$/i],
   },
+  shouldSearch: isNetworkQuery,
   searchDebounceMs: 150,
   tools: [
     {

@@ -53,6 +53,7 @@ export const dockerPlugin: GQuickPlugin = {
     keywords: ["docker", "container", "image", "hub", "compose"],
     queryPrefixes: [/^docker\s*:/i],
   },
+  shouldSearch: (query: string) => DOCKER_PREFIX_PATTERN.test(query.trim()),
   searchDebounceMs: 300,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmedQuery = query.trim();
@@ -60,7 +61,7 @@ export const dockerPlugin: GQuickPlugin = {
     // Keep Docker search opt-in so the launcher does not pay Docker CLI/Hub latency
     // unless the user explicitly asks with the `docker:` prefix.
     if (!DOCKER_PREFIX_PATTERN.test(trimmedQuery)) {
-      return trimmedQuery.toLowerCase() === "docker" ? [getOpenDockerItem("Open Docker page. Use docker: <image> to search images.")] : [];
+      return [];
     }
 
     const searchTerm = trimmedQuery.replace(DOCKER_PREFIX_PATTERN, "").trim();

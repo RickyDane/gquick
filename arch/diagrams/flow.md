@@ -11,8 +11,12 @@ flowchart TD
 
     Wait -->|Alt+Space| Toggle{Window Visible?}
     Toggle -->|Yes| Hide[Hide Window]
-    Toggle -->|No| Show[Show + Focus Window]
-    Hide --> Wait
+    Toggle -->|No| Record[Record Previous
+    Focused App/Window]
+    Record --> Show[Show + Focus Window]
+    Hide --> Restore[Restore Previous Focus
+    Best Effort]
+    Restore --> Wait
     Show --> Wait
 
     Wait -->|Alt+S| Screenshot[Open Selector

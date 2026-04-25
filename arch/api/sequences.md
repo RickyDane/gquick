@@ -336,6 +336,7 @@ sequenceDiagram
     participant GS as Global Shortcut
     participant Rust as Rust Backend
     participant Window as Main Window
+    participant System as OS Window Manager
 
     User->>GS: Press Alt+Space
     GS->>Rust: Shortcut handler (state == Pressed)
@@ -346,13 +347,17 @@ sequenceDiagram
     alt Window is visible
         Rust->>Window: window.hide()
         Rust->>Window: emit("window-hidden", ())
+        Rust->>System: Restore previous foreground app/window
     else Window is hidden
+        Rust->>System: Record current foreground app/window
         Rust->>Window: Calculate centered position
         Rust->>Window: window.set_position(x, y)
         Rust->>Window: window.show()
         Rust->>Window: window.set_focus()
         Rust->>Window: emit("window-shown", ())
     end
+
+    Note over Rust,System: macOS: osascript bundle id activation<br/>Windows: saved HWND via windows-sys<br/>Linux/X11: xdotool best effort
 ```
 
 ## Quick Translate Sequence

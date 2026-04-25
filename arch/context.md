@@ -6,7 +6,7 @@
 
 ## Architecture Summary
 
-GQuick follows a **Tauri 2.0 architecture** with a clear separation between a Rust-native backend (system integration, screen capture, OCR, file indexing, shortcuts, tray) and a React frontend (UI, plugin system, settings, AI chat). The app uses a transparent, borderless window that can be toggled via global shortcuts.
+GQuick follows a **Tauri 2.0 architecture** with a clear separation between a Rust-native backend (system integration, screen capture, OCR, file indexing, shortcuts, tray) and a React frontend (UI, plugin system, settings, AI chat). The app uses a transparent, borderless window that can be toggled via global shortcuts; Rust records the previous foreground app/window before launcher activation and best-effort restores it when the launcher hides or closes.
 
 ```mermaid
 graph TB
@@ -255,6 +255,7 @@ AI responds with note-aware answer
 - **Serialization**: serde, serde_json
 - **Base64**: base64 0.22
 - **SQLite**: rusqlite 0.32
+- **Window Focus Restore**: `windows-sys` on Windows; `osascript` on macOS; `xdotool` best effort on Linux/X11
 
 ### Tauri Plugins Used
 | Plugin | Purpose |
@@ -280,6 +281,8 @@ AI responds with note-aware answer
 | `⌘R` / `Ctrl+R` | Clear chat (in chat view) | No |
 | `⌘N` / `Ctrl+N` | Open notes view | No |
 | `Escape` | Close/hide current view | No |
+
+Window focus restore is backend-owned and tied to main launcher visibility: macOS reactivates by bundle id, Windows restores the saved HWND, and Linux/X11 attempts activation via `xdotool`.
 
 ## AI Provider Integration
 
@@ -335,7 +338,7 @@ The AI chat, translate, and smart file search features all make **real API calls
 
 | File | Responsibility |
 |------|----------------|
-| `src-tauri/src/lib.rs` | **Core backend**: all Tauri commands, shortcuts, tray, window mgmt, file indexing, OCR |
+| `src-tauri/src/lib.rs` | **Core backend**: all Tauri commands, shortcuts, tray, window mgmt/focus restore, file indexing, OCR |
 | `src-tauri/src/main.rs` | Entry point — delegates to lib |
 | `src-tauri/tauri.conf.json` | Tauri app config: window settings, security CSP, bundle config |
 | `src-tauri/Cargo.toml` | Rust dependencies: tauri, xcap, image, tesseract, plugins |
@@ -407,6 +410,7 @@ Based on code analysis, the project is in **active development with core feature
 8. **File index caching**: 5-minute TTL balances freshness vs performance
 9. **SQLite via rusqlite for notes persistence**: Notes stored in local SQLite database with `rusqlite` crate for cross-platform persistence without external dependencies
 10. **Docker boundary**: Frontend owns Docker Hub public API search and confirmations; Rust owns local Docker CLI/Compose execution with typed commands, CLI/daemon detection, and structured errors.
+11. **Focus restoration**: Rust captures the prior foreground app/window before showing the launcher and restores it on hide/close to preserve user context; Linux/X11 support is best effort.
 
 ## Docker Expansion Notes
 

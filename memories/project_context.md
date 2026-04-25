@@ -6,7 +6,7 @@
 
 ## Architecture Summary
 
-GQuick follows a **Tauri 2.0 architecture** with a clear separation between a Rust-native backend (system integration, screen capture, OCR, file indexing, shortcuts, tray) and a React frontend (UI, plugin system, settings, AI chat). The app uses a transparent, borderless window that can be toggled via global shortcuts.
+GQuick follows a **Tauri 2.0 architecture** with a clear separation between a Rust-native backend (system integration, screen capture, OCR, file indexing, shortcuts, tray) and a React frontend (UI, plugin system, settings, AI chat). The app uses a transparent, borderless window that can be toggled via global shortcuts; before showing/focusing the launcher, Rust records the previous foreground app/window and best-effort restores it when the launcher hides or closes.
 
 The **Plugin Tools** feature extends the plugin system so that plugins can expose structured functions that AI models (OpenAI, Kimi, Gemini, Claude) can invoke during chat conversations. Tool definitions are provider-agnostic; format conversion happens at API request time. Tool results feed back into conversation history, enabling multi-turn tool use. See `arch/plugin-tools.md` for full architecture.
 
@@ -108,7 +108,7 @@ graph TB
 Located in `src/plugins/`. Each plugin implements `GQuickPlugin` interface:
 
 - **appLauncher**: Lists and launches system applications (cross-platform)
-- **fileSearch**: Fast filename search + AI-powered smart file search with content reading
+- **fileSearch**: Fast filename search + AI-powered smart file search with safe indexed-file content reading
 - **calculator**: Evaluates math expressions in search bar
 - **docker**: Manages Docker containers and images with inline actions
 - **docker (target expansion)**: Docker Hub search should use Docker Hub public API from frontend; local image/container/compose operations should remain Rust Tauri commands backed by Docker CLI.
@@ -162,14 +162,16 @@ User types smart query (e.g., "find files about budgeting from last week")
     ↓
 smart_search_files Rust command
     ↓
-Builds file index (cached 5 min), scans home dir max depth 6
+Builds file index (cached 5 min), scans home dir with bounded max depth (default 12, env-clamped 6-32)
     ↓
-Returns candidates with metadata + content previews
+Returns candidates with metadata + safe content previews
     ↓
 Frontend calls AI API to rank files by relevance
     ↓
 Displays ranked results with "Smart" badge
 ```
+
+The file index never follows or indexes symlinks, skips hidden paths and common system/build/cache folders, and caps indexing at 100,000 entries with an internal warning when results are truncated. `smart_search_files` reads metadata without following symlinks and only includes content previews/full content for files that pass the same safe-read policy as the AI `read_file` tool; unsafe files return metadata-only. The AI `read_file` tool only reads absolute text-file paths already present in the current search index; it rejects hidden paths, symlinks, likely secrets/credentials/key files, directories, non-regular files, and reads above the 200KB cap.
 
 ### Screenshot/OCR Flow
 ```
@@ -293,6 +295,7 @@ AI responds with note-aware answer
 - **Serialization**: serde, serde_json
 - **Base64**: base64 0.22
 - **SQLite**: rusqlite 0.32
+- **Window Focus Restore**: `windows-sys` on Windows; `osascript` on macOS; `xdotool` best effort on Linux/X11
 
 ### Tauri Plugins Used
 | Plugin | Purpose |
@@ -318,6 +321,8 @@ AI responds with note-aware answer
 | `⌘R` / `Ctrl+R` | Clear chat (in chat view) | No |
 | `⌘N` / `Ctrl+N` | Open notes view | No |
 | `Escape` | Close/hide current view | No |
+
+Window focus restore is backend-owned: macOS reactivates the prior app by bundle id via `osascript`, Windows stores/restores the previous HWND via `windows-sys`, and Linux/X11 attempts best-effort activation via `xdotool`.
 
 ## AI Provider Integration
 
@@ -373,7 +378,7 @@ The AI chat, translate, and smart file search features all make **real API calls
 
 | File | Responsibility |
 |------|----------------|
-| `src-tauri/src/lib.rs` | **Core backend**: all Tauri commands, shortcuts, tray, window mgmt, file indexing, OCR |
+| `src-tauri/src/lib.rs` | **Core backend**: all Tauri commands, shortcuts, tray, window mgmt/focus restore, file indexing, OCR |
 | `src-tauri/src/main.rs` | Entry point — delegates to lib |
 | `src-tauri/tauri.conf.json` | Tauri app config: window settings, security CSP, bundle config |
 | `src-tauri/Cargo.toml` | Rust dependencies: tauri, xcap, image, tesseract, plugins |
@@ -452,6 +457,7 @@ Based on code analysis, the project is in **active development with core feature
 9. **SQLite via rusqlite for notes persistence**: Notes stored in local SQLite database with `rusqlite` crate for cross-platform persistence without external dependencies
 10. **Docker boundary**: Frontend owns Docker Hub public API search and confirmations; Rust owns local Docker CLI/Compose execution with typed commands, CLI/daemon detection, and structured errors.
 11. **Plugin Tools architecture**: Plugins optionally expose `tools` array + `executeTool` method. Tool discovery is centralized via `toolManager.ts`. Provider-specific format conversion happens at API call time. Tool results feed back into conversation as new messages, enabling multi-turn tool use.
+12. **Focus restoration**: Rust records the foreground window/app before launcher activation and restores it on launcher hide/close to preserve the user's previous working context. Platform implementation is native where reliable and best-effort on Linux/X11.
 
 ## Docker Expansion Notes
 

@@ -25,9 +25,31 @@ const SMART_SEARCH_KEYWORDS = [
   "content", "contains", "with text", "document about"
 ];
 
+const SMART_SEARCH_DEBOUNCE_MS = 500;
+let smartSearchRequestId = 0;
+
 function isSmartSearchQuery(query: string): boolean {
   const lower = query.toLowerCase();
   return SMART_SEARCH_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+function normalizeSearchText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+function scoreIndexedFileResult(file: FileInfo, query: string, isFileQuery: boolean): number {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedName = normalizeSearchText(file.name);
+
+  if (normalizedName === normalizedQuery) {
+    return 115;
+  }
+
+  if (normalizedName.startsWith(normalizedQuery) || isFileQuery) {
+    return 105;
+  }
+
+  return 85;
 }
 
 function formatFileSize(bytes: number): string {
@@ -159,11 +181,12 @@ export const fileSearchPlugin: GQuickPlugin = {
     icon: File,
     keywords: ["file", "folder", "open", "find"],
   },
-  searchDebounceMs: 150,
+  shouldSearch: (query: string) => query.trim().length >= 2,
+  getSearchDebounceMs: () => SMART_SEARCH_DEBOUNCE_MS,
   tools: [
     {
       name: "search_files",
-      description: "Search the local filesystem for files and folders by name. Returns matching file paths with metadata.",
+      description: "Search the local filesystem for files and folders by name, including deeply nested folders. Returns matching file paths with metadata.",
       parameters: {
         type: "object",
         properties: {
@@ -179,9 +202,35 @@ export const fileSearchPlugin: GQuickPlugin = {
         required: ["query"],
       },
     },
+    {
+      name: "read_file",
+      description: "Read a safe local text file returned by search_files. Hidden files, symlinks, secrets, credentials, and key files are rejected.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute path of the text file to read",
+          },
+          max_bytes: {
+            type: "integer",
+            description: "Maximum bytes to read, capped by the app for safety",
+          },
+        },
+        required: ["path"],
+      },
+    },
   ],
-  executeTool: async (_name: string, args: Record<string, any>): Promise<ToolResult> => {
+  executeTool: async (name: string, args: Record<string, any>): Promise<ToolResult> => {
     try {
+      if (name === "read_file") {
+        const content = await invoke<string>("read_file", {
+          path: args.path,
+          maxBytes: typeof args.max_bytes === "number" ? args.max_bytes : undefined,
+        });
+        return { content, success: true };
+      }
+
       const files = await invoke<FileInfo[]>("search_files", { query: args.query });
       const maxResults = typeof args.max_results === "number" ? args.max_results : files.length;
       const sliced = files.slice(0, maxResults);
@@ -195,15 +244,15 @@ export const fileSearchPlugin: GQuickPlugin = {
       return [];
     }
 
+    const requestId = ++smartSearchRequestId;
     const smartMode = isSmartSearchQuery(query);
 
     const q = query.toLowerCase();
     const isFileQuery = q.includes("file") || q.includes("folder") || q.includes("open");
 
     if (!smartMode) {
-      // Fast filename search (existing behavior)
       try {
-        const files = await invoke<FileInfo[]>("search_files", { query });
+        const files = await invoke<FileInfo[]>("launcher_search_files", { query });
 
         return files.map((file) => ({
           id: file.path,
@@ -211,7 +260,7 @@ export const fileSearchPlugin: GQuickPlugin = {
           title: file.name,
           subtitle: file.path,
           icon: file.is_dir ? Folder : File,
-          score: isFileQuery ? 100 : undefined,
+          score: scoreIndexedFileResult(file, query, isFileQuery),
           onSelect: async () => {
             try {
               await invoke("open_file", { path: file.path });
@@ -228,7 +277,10 @@ export const fileSearchPlugin: GQuickPlugin = {
 
     // Smart search mode
     try {
+      if (requestId !== smartSearchRequestId) return [];
+
       const smartFiles = await invoke<SmartFileInfo[]>("smart_search_files", { query });
+      if (requestId !== smartSearchRequestId) return [];
 
       if (smartFiles.length === 0) {
         return [{
@@ -244,6 +296,7 @@ export const fileSearchPlugin: GQuickPlugin = {
 
       // Get AI-ranked indices
       const rankedIndices = await callAiRankFiles(query, smartFiles);
+      if (requestId !== smartSearchRequestId) return [];
 
       // Reorder files based on AI ranking
       const orderedFiles = rankedIndices.map(i => smartFiles[i]);

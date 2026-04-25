@@ -58,6 +58,8 @@ GQuick uses two Tauri windows:
 
 Both share the same HTML entry point; `main.tsx` routes based on `window.label`.
 
+The Rust backend owns launcher focus behavior. Before showing/focusing the **"main"** window, it records the previously focused app/window and restores it when the launcher hides or closes (macOS bundle id via `osascript`, Windows HWND via `windows-sys`, Linux/X11 `xdotool` best effort).
+
 ## Plugin Architecture
 
 The plugin system allows decoupled search providers:
@@ -120,6 +122,7 @@ Single result display → Enter copies to clipboard
 5. **Transparent borderless windows**: Native Spotlight-like feel
 6. **Real AI streaming via SSE**: Responsive chat experience across all providers
 7. **File index with caching**: 5-minute TTL, home directory, max depth 6
+8. **Focus restoration on launcher dismiss**: Preserve the user's previous foreground app/window after transient launcher use
 
 ## Docker Expansion Guidance
 

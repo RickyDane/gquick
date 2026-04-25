@@ -151,7 +151,13 @@ fn escape_like_pattern(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::escape_like_pattern;
+    use super::{
+        escape_like_pattern, file_matches_query, is_safe_ai_read_path, parse_file_search_max_depth,
+        read_ai_file_content, runtime_search_roots, score_file_relevance, search_roots_for_home,
+        should_index_entry_name, truncate_string_to_byte_boundary, validate_ai_readable_file,
+        FileInfo,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn escapes_like_wildcards_and_escape_character() {
@@ -159,6 +165,255 @@ mod tests {
             escape_like_pattern(r"100%_done\today"),
             r"100\%\_done\\today"
         );
+    }
+
+    #[test]
+    fn parses_file_search_depth_with_safe_bounds() {
+        assert_eq!(parse_file_search_max_depth(None), 12);
+        assert_eq!(parse_file_search_max_depth(Some("2".to_string())), 6);
+        assert_eq!(parse_file_search_max_depth(Some("18".to_string())), 18);
+        assert_eq!(parse_file_search_max_depth(Some("100".to_string())), 32);
+        assert_eq!(parse_file_search_max_depth(Some("nope".to_string())), 12);
+    }
+
+    #[test]
+    fn safe_ai_read_policy_rejects_hidden_and_secret_paths() {
+        assert!(is_safe_ai_read_path(&PathBuf::from("/tmp/.hidden/notes.txt")).is_err());
+        assert!(is_safe_ai_read_path(&PathBuf::from("/tmp/api_token.txt")).is_err());
+        assert!(is_safe_ai_read_path(&PathBuf::from("/tmp/public-notes.txt")).is_ok());
+    }
+
+    #[test]
+    fn file_matching_handles_nested_folder_case_and_unicode_forms() {
+        let folder = FileInfo {
+            name: "Ausgangsrechnungen".to_string(),
+            path: "/Users/ricky/Documents/Beruflich/Selbststa\u{308}ndigkeit/Arickinda/Ausgangsrechnungen".to_string(),
+            is_dir: true,
+        };
+
+        assert!(file_matches_query(&folder, "ausgangsrechnungen").is_some());
+
+        let keywords = vec!["selbstständigkeit".to_string()];
+        let name = "Ausgangsrechnungen".to_string();
+        let path = folder.path.clone();
+        assert!(score_file_relevance(&name, &path, &keywords).is_some());
+    }
+
+    #[test]
+    fn search_roots_prioritize_user_document_folders_before_home() {
+        let home = PathBuf::from("/Users/ricky");
+        let roots = search_roots_for_home(&home);
+
+        assert_eq!(roots.first(), Some(&home.join("Documents")));
+        assert!(roots.contains(&home));
+    }
+
+    #[test]
+    fn file_search_policy_skips_hidden_entries_but_keeps_user_documents() {
+        assert!(!should_index_entry_name(".ssh"));
+        assert!(!should_index_entry_name(".config"));
+        assert!(!should_index_entry_name(".gnupg"));
+        assert!(!should_index_entry_name(".hidden-note.txt"));
+        assert!(should_index_entry_name("Documents"));
+        assert!(should_index_entry_name("Ausgangsrechnungen"));
+    }
+
+    #[test]
+    fn runtime_search_finds_nested_folder_without_index() {
+        let base = std::env::temp_dir().join(format!(
+            "gquick-runtime-file-search-test-{}",
+            std::process::id()
+        ));
+        let target = base
+            .join("Documents")
+            .join("Beruflich")
+            .join("Selbststa\u{308}ndigkeit")
+            .join("Arickinda")
+            .join("Ausgangsrechnungen");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&target).unwrap();
+
+        let results = runtime_search_roots(
+            "ausgangsrechnungen",
+            &[base.join("Documents")],
+            12,
+            10_000,
+            10,
+        );
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(results.iter().any(|(file, _)| file
+            .path
+            .ends_with("Beruflich/Selbststa\u{308}ndigkeit/Arickinda/Ausgangsrechnungen")));
+    }
+
+    #[test]
+    fn runtime_search_keeps_best_match_not_first_match() {
+        let base = std::env::temp_dir().join(format!(
+            "gquick-runtime-ranking-test-{}",
+            std::process::id()
+        ));
+        let low_score_dir = base.join("needle-holder");
+        let high_score_dir = base.join("later");
+        let high_score_file = high_score_dir.join("needle");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&low_score_dir).unwrap();
+        std::fs::write(low_score_dir.join("alpha.txt"), "low").unwrap();
+        std::fs::create_dir_all(&high_score_dir).unwrap();
+        std::fs::write(&high_score_file, "high").unwrap();
+
+        let results = runtime_search_roots("needle", &[base.clone()], 4, 10_000, 1);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0.path, high_score_file.to_string_lossy());
+    }
+
+    #[test]
+    fn runtime_search_skips_hidden_entries_with_jwalk() {
+        let base = std::env::temp_dir().join(format!(
+            "gquick-runtime-hidden-skip-test-{}",
+            std::process::id()
+        ));
+        let hidden = base.join("Documents").join(".hidden");
+        let visible = base.join("Documents").join("visible");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::create_dir_all(&visible).unwrap();
+        std::fs::write(hidden.join("needle.txt"), "hidden").unwrap();
+        std::fs::write(visible.join("needle.txt"), "visible").unwrap();
+
+        let results = runtime_search_roots("needle", &[base.join("Documents")], 4, 10_000, 10);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(results
+            .iter()
+            .any(|(file, _)| file.path.contains("visible")));
+        assert!(!results
+            .iter()
+            .any(|(file, _)| file.path.contains(".hidden")));
+    }
+
+    #[test]
+    fn runtime_search_gives_each_root_its_own_budget() {
+        let base = std::env::temp_dir().join(format!(
+            "gquick-runtime-root-budget-test-{}",
+            std::process::id()
+        ));
+        let crowded_root = base.join("crowded");
+        let exact_root = base.join("exact-root");
+        let exact_file = exact_root.join("needle.txt");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&crowded_root).unwrap();
+        std::fs::create_dir_all(&exact_root).unwrap();
+        for i in 0..8_200 {
+            std::fs::write(crowded_root.join(format!("f-{i}.txt")), "filler").unwrap();
+        }
+        std::fs::write(&exact_file, "target").unwrap();
+
+        let results = runtime_search_roots("needle", &[crowded_root, exact_root], 2, 9_000, 10);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(results
+            .iter()
+            .any(|(file, _)| file.path == exact_file.to_string_lossy()));
+    }
+
+    #[test]
+    fn truncating_string_uses_utf8_boundaries() {
+        let mut value = "abc😀def".to_string();
+
+        assert!(truncate_string_to_byte_boundary(&mut value, 5));
+        assert_eq!(value, "abc");
+    }
+
+    #[test]
+    fn read_ai_file_content_truncates_at_utf8_boundary() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("gquick-utf8-truncate-test-{}", std::process::id()));
+        let target = base.join("unicode.txt");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(&target, "abc😀def").unwrap();
+
+        let result = read_ai_file_content(&target, 5);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(
+            result.as_deref(),
+            Some("abc\n... [file truncated, content too large] ...")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_ai_readable_file_rejects_symlinks() {
+        let base =
+            std::env::temp_dir().join(format!("gquick-safe-read-test-{}", std::process::id()));
+        let target = base.join("target.txt");
+        let link = base.join("link.txt");
+
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(&target, "safe text").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = validate_ai_readable_file(&link);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_ai_file_content_rejects_symlinked_text_files() {
+        let base = std::env::temp_dir().join(format!(
+            "gquick-safe-content-read-test-{}",
+            std::process::id()
+        ));
+        let target = base.join("target.txt");
+        let link = base.join("link.txt");
+
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(&target, "safe text").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = read_ai_file_content(&link, 100);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(result.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_ai_file_content_rejects_symlinked_ancestor() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "gquick-safe-ancestor-read-test-{}",
+                std::process::id()
+            ));
+        let real_dir = base.join("real");
+        let link_dir = base.join("link");
+        let target = real_dir.join("notes.txt");
+        let linked_path = link_dir.join("notes.txt");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&real_dir).unwrap();
+        std::fs::write(&target, "safe text").unwrap();
+        std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+
+        let result = read_ai_file_content(&linked_path, 100);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(result.is_none());
     }
 }
 
@@ -325,7 +580,7 @@ struct SmartFileInfo {
     full_content: Option<String>,
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::net::IpAddr;
 #[cfg(unix)]
@@ -334,6 +589,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use unicode_normalization::UnicodeNormalization;
 
 async fn run_blocking<F, R>(operation: F) -> Result<R, String>
 where
@@ -354,6 +610,32 @@ struct ShortcutState {
 struct DialogState {
     is_open: std::sync::Mutex<bool>,
 }
+
+struct PreviousFocusState {
+    target: Mutex<Option<PreviousFocusTarget>>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug)]
+struct PreviousFocusTarget {
+    bundle_identifier: String,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug)]
+struct PreviousFocusTarget {
+    hwnd: usize,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+struct PreviousFocusTarget {
+    window_id: String,
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[derive(Clone, Debug)]
+struct PreviousFocusTarget;
 
 struct TerminalState {
     inline_processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
@@ -389,31 +671,124 @@ struct DbState {
     conn: Mutex<rusqlite::Connection>,
 }
 
-struct FileIndex {
-    files: Vec<FileInfo>,
-    last_updated: Option<Instant>,
+const DEFAULT_FILE_SEARCH_MAX_DEPTH: usize = 12;
+const MIN_FILE_SEARCH_MAX_DEPTH: usize = 6;
+const MAX_FILE_SEARCH_MAX_DEPTH: usize = 32;
+const RUNTIME_FILE_SEARCH_MAX_VISITED: usize = 25_000;
+const FILE_SEARCH_RESULT_LIMIT: usize = 50;
+const SMART_FILE_SEARCH_CANDIDATE_LIMIT: usize = 100;
+const AI_READ_FILE_MAX_BYTES: usize = 200_000;
+const AI_READ_FILE_DEFAULT_BYTES: usize = 100_000;
+
+fn parse_file_search_max_depth(value: Option<String>) -> usize {
+    value
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .map(|depth| depth.clamp(MIN_FILE_SEARCH_MAX_DEPTH, MAX_FILE_SEARCH_MAX_DEPTH))
+        .unwrap_or(DEFAULT_FILE_SEARCH_MAX_DEPTH)
 }
 
-static FILE_INDEX: Mutex<Option<Arc<Mutex<FileIndex>>>> = Mutex::new(None);
-
-fn get_or_create_index() -> Arc<Mutex<FileIndex>> {
-    let mut global = FILE_INDEX.lock().unwrap();
-    if let Some(index) = global.as_ref() {
-        return index.clone();
-    }
-    let index = Arc::new(Mutex::new(FileIndex {
-        files: Vec::new(),
-        last_updated: None,
-    }));
-    *global = Some(index.clone());
-    index
+fn configured_file_search_max_depth() -> usize {
+    parse_file_search_max_depth(std::env::var("GQUICK_FILE_SEARCH_MAX_DEPTH").ok())
 }
 
-fn should_refresh_index(index: &FileIndex) -> bool {
-    match index.last_updated {
-        None => true,
-        Some(last) => Instant::now().duration_since(last) > Duration::from_secs(300), // 5 min cache
+fn normalize_search_text(value: &str) -> String {
+    value.nfc().collect::<String>().to_lowercase()
+}
+
+fn should_index_entry_name(name: &str) -> bool {
+    !name.starts_with('.')
+}
+
+fn truncate_string_to_byte_boundary(value: &mut String, max_bytes: usize) -> bool {
+    if value.len() <= max_bytes {
+        return false;
     }
+
+    let boundary = if value.is_char_boundary(max_bytes) {
+        max_bytes
+    } else {
+        value
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index < max_bytes)
+            .last()
+            .unwrap_or(0)
+    };
+    value.truncate(boundary);
+    true
+}
+
+fn search_roots_for_home(home: &Path) -> Vec<PathBuf> {
+    let priority_dirs = [
+        "Documents",
+        "Desktop",
+        "Downloads",
+        "Projects",
+        "Coding",
+        "Developer",
+        "Pictures",
+        "Movies",
+        "Music",
+    ];
+
+    let mut roots: Vec<PathBuf> = priority_dirs.iter().map(|dir| home.join(dir)).collect();
+    roots.push(home.to_path_buf());
+    roots
+}
+
+fn default_search_roots() -> Vec<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let home = std::env::var("USERPROFILE").ok();
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var("HOME").ok();
+
+    home.map(|home| search_roots_for_home(Path::new(&home)))
+        .unwrap_or_default()
+}
+
+fn file_search_skip_dirs() -> std::collections::HashSet<&'static str> {
+    [
+        "node_modules",
+        ".git",
+        "target",
+        "build",
+        "dist",
+        ".cache",
+        "Caches",
+        "Trash",
+        ".Trash",
+        "Library",
+        ".npm",
+        ".cargo",
+        ".rustup",
+        ".vscode",
+        ".idea",
+        "vendor",
+        "bin",
+        "obj",
+        "out",
+        "logs",
+        "AppData",
+        "Application Data",
+        "Cookies",
+        "Recent",
+        "SendTo",
+        "Start Menu",
+        "Templates",
+        "NetHood",
+        "PrintHood",
+        "Local Settings",
+        "My Documents",
+        "proc",
+        "sys",
+        "dev",
+        "run",
+        "snap",
+        "flatpak",
+    ]
+    .iter()
+    .cloned()
+    .collect()
 }
 
 fn system_time_to_iso(time: std::time::SystemTime) -> Option<String> {
@@ -481,64 +856,348 @@ fn is_text_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-fn read_full_content(path: &std::path::Path, max_size: usize) -> Option<String> {
+fn path_has_hidden_component(path: &std::path::Path) -> bool {
+    path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(name) if name.to_string_lossy().starts_with('.'))
+    })
+}
+
+fn filename_contains_secret_marker(file_name_lower: &str) -> bool {
+    let denied_exact = [
+        ".env",
+        "credentials",
+        "credential",
+        "secrets",
+        "secret",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "known_hosts",
+        "authorized_keys",
+        "kubeconfig",
+    ];
+    let denied_fragments = [
+        "credential",
+        "credentials",
+        "secret",
+        "token",
+        "apikey",
+        "api_key",
+        "access_key",
+        "private_key",
+        "client_secret",
+        "authkey",
+        "auth_key",
+    ];
+
+    denied_exact.contains(&file_name_lower)
+        || file_name_lower.starts_with(".env")
+        || denied_fragments
+            .iter()
+            .any(|fragment| file_name_lower.contains(fragment))
+}
+
+fn has_sensitive_extension(path: &std::path::Path) -> bool {
+    let denied_extensions = [
+        "pem", "key", "p12", "pfx", "crt", "cer", "der", "kdbx", "gpg", "asc", "age", "env",
+    ];
+
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| denied_extensions.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn is_safe_ai_read_path(path: &std::path::Path) -> Result<(), String> {
+    let file_name_lower = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    if path_has_hidden_component(path) {
+        return Err("Refusing to read hidden files or files inside hidden folders".to_string());
+    }
+
+    if filename_contains_secret_marker(&file_name_lower) || has_sensitive_extension(path) {
+        return Err(
+            "Refusing to read files that look like secrets, credentials, or keys".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_ai_readable_file(path: &std::path::Path) -> Result<std::fs::Metadata, String> {
+    let (_file, metadata) = open_ai_readable_file(path)?;
+    Ok(metadata)
+}
+
+#[cfg(unix)]
+fn path_normal_components(path: &std::path::Path) -> Result<Vec<&std::ffi::OsStr>, String> {
+    use std::path::Component;
+
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::Normal(part) => components.push(part),
+            Component::CurDir | Component::ParentDir => {
+                return Err("Refusing to read paths containing . or ..".to_string());
+            }
+        }
+    }
+
+    if components.is_empty() {
+        return Err("Cannot read a directory".to_string());
+    }
+
+    Ok(components)
+}
+
+#[cfg(unix)]
+fn open_ai_readable_file_handle(path: &std::path::Path) -> Result<std::fs::File, String> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    if !path.is_absolute() {
+        return Err("File path must be absolute".to_string());
+    }
+
+    let components = path_normal_components(path)?;
+    let mut dir = std::fs::File::open(std::path::Path::new("/"))
+        .map_err(|_| "File could not be accessed or permission was denied".to_string())?;
+
+    for component in &components[..components.len() - 1] {
+        let name = CString::new(component.as_bytes())
+            .map_err(|_| "Refusing to read paths containing NUL bytes".to_string())?;
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY,
+            )
+        };
+
+        if fd < 0 {
+            return Err("Refusing to read through symlinked or invalid folders".to_string());
+        }
+
+        dir = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+
+    let final_name = CString::new(components[components.len() - 1].as_bytes())
+        .map_err(|_| "Refusing to read paths containing NUL bytes".to_string())?;
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            final_name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+
+    if fd < 0 {
+        return Err("File could not be accessed or permission was denied".to_string());
+    }
+
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn path_normal_components(path: &std::path::Path) -> Result<Vec<&std::ffi::OsStr>, String> {
+    use std::path::Component;
+
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::Normal(part) => components.push(part),
+            Component::CurDir | Component::ParentDir => {
+                return Err("Refusing to read paths containing . or ..".to_string());
+            }
+        }
+    }
+
+    if components.is_empty() {
+        return Err("Cannot read a directory".to_string());
+    }
+
+    Ok(components)
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(windows)]
+fn open_no_follow_final(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn open_ai_readable_file_handle(path: &std::path::Path) -> Result<std::fs::File, String> {
+    if !path.is_absolute() {
+        return Err("File path must be absolute".to_string());
+    }
+
+    let _components = path_normal_components(path)?;
+
+    // Windows fallback: reject reparse-point ancestors immediately before final open.
+    // A malicious same-user race between this check and open remains possible because std
+    // does not expose component-by-component CreateFileW handles here.
+    let mut ancestors: Vec<&std::path::Path> = path.ancestors().skip(1).collect();
+    ancestors.reverse();
+    for ancestor in ancestors {
+        let metadata = std::fs::symlink_metadata(ancestor)
+            .map_err(|_| "File could not be accessed or permission was denied".to_string())?;
+        if metadata_is_reparse_point(&metadata) {
+            return Err("Refusing to read through reparse-point folders".to_string());
+        }
+        if !metadata.is_dir() {
+            return Err("Refusing to read through non-directory ancestors".to_string());
+        }
+    }
+
+    open_no_follow_final(path)
+        .map_err(|_| "File could not be accessed or permission was denied".to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_normal_components(path: &std::path::Path) -> Result<Vec<&std::ffi::OsStr>, String> {
+    use std::path::Component;
+
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::Normal(part) => components.push(part),
+            Component::CurDir | Component::ParentDir => {
+                return Err("Refusing to read paths containing . or ..".to_string());
+            }
+        }
+    }
+
+    if components.is_empty() {
+        return Err("Cannot read a directory".to_string());
+    }
+
+    Ok(components)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_ai_readable_file_handle(path: &std::path::Path) -> Result<std::fs::File, String> {
+    if !path.is_absolute() {
+        return Err("File path must be absolute".to_string());
+    }
+
+    let _components = path_normal_components(path)?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "File could not be accessed or permission was denied".to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Refusing to read symlinked files".to_string());
+    }
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(|_| "File could not be accessed or permission was denied".to_string())
+}
+
+fn validate_opened_ai_file_metadata(metadata: &std::fs::Metadata) -> Result<(), String> {
+    if metadata.file_type().is_symlink() {
+        return Err("Refusing to read symlinked files".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        if metadata_is_reparse_point(metadata) {
+            return Err("Refusing to read reparse-point files".to_string());
+        }
+    }
+
+    if metadata.is_dir() {
+        return Err("Cannot read a directory".to_string());
+    }
+
+    if !metadata.is_file() {
+        return Err("Refusing to read non-regular files".to_string());
+    }
+
+    Ok(())
+}
+
+fn open_ai_readable_file(
+    path: &std::path::Path,
+) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    is_safe_ai_read_path(path)?;
+
+    let file = open_ai_readable_file_handle(path)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "File could not be accessed or permission was denied".to_string())?;
+
+    validate_opened_ai_file_metadata(&metadata)?;
+
+    Ok((file, metadata))
+}
+
+fn read_opened_text_content(mut file: std::fs::File, max_size: usize) -> Option<String> {
+    use std::io::Read;
+
+    let read_limit = max_size.saturating_add(1) as u64;
+    let mut buffer = Vec::with_capacity(max_size.min(64 * 1024));
+    file.by_ref()
+        .take(read_limit)
+        .read_to_end(&mut buffer)
+        .ok()?;
+
+    let truncated = buffer.len() > max_size;
+    if truncated {
+        buffer.truncate(max_size);
+    }
+
+    if buffer.iter().any(|byte| *byte == 0) {
+        return None;
+    }
+
+    let mut content = match String::from_utf8(buffer) {
+        Ok(content) => content,
+        Err(err) if truncated && err.utf8_error().error_len().is_none() => {
+            let valid_up_to = err.utf8_error().valid_up_to();
+            let mut bytes = err.into_bytes();
+            bytes.truncate(valid_up_to);
+            String::from_utf8(bytes).ok()?
+        }
+        Err(_) => return None,
+    };
+    if truncated {
+        content.push_str("\n... [file truncated, content too large] ...");
+    }
+
+    Some(content)
+}
+
+fn read_ai_file_content(path: &std::path::Path, max_size: usize) -> Option<String> {
     if !is_text_file(path) {
         return None;
     }
 
-    // First check file size
-    let metadata = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(_) => return None,
-    };
-
-    let file_size = metadata.len() as usize;
-    if file_size > max_size {
-        // For large files, just read the beginning and end
-        return read_large_file_content(path, max_size);
-    }
-
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            // Verify it's actually text by checking for null bytes
-            if content.bytes().any(|b| b == 0) {
-                return None;
-            }
-            Some(content)
-        }
-        Err(_) => None,
-    }
-}
-
-fn read_large_file_content(path: &std::path::Path, max_size: usize) -> Option<String> {
-    use std::io::{BufRead, BufReader};
-
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return None,
-    };
-
-    let reader = BufReader::new(file);
-    let mut content = String::new();
-    let mut byte_count = 0;
-
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            byte_count += line.len() + 1; // +1 for newline
-            if byte_count > max_size {
-                content.push_str("\n... [file truncated, content too large] ...");
-                break;
-            }
-            content.push_str(&line);
-            content.push('\n');
-        }
-    }
-
-    if content.is_empty() {
-        None
-    } else {
-        Some(content)
-    }
+    let (file, _metadata) = open_ai_readable_file(path).ok()?;
+    read_opened_text_content(file, max_size)
 }
 
 fn extract_meaningful_keywords(query: &str) -> Vec<String> {
@@ -646,8 +1305,7 @@ fn extract_meaningful_keywords(query: &str) -> Vec<String> {
     .cloned()
     .collect();
 
-    query
-        .to_lowercase()
+    normalize_search_text(query)
         .split_whitespace()
         .filter(|word| {
             let w = word.trim_matches(|c: char| !c.is_alphanumeric());
@@ -657,17 +1315,20 @@ fn extract_meaningful_keywords(query: &str) -> Vec<String> {
         .collect()
 }
 
-fn score_file_relevance(name_lower: &str, path_lower: &str, keywords: &[String]) -> Option<i32> {
+fn score_file_relevance(name: &str, path: &str, keywords: &[String]) -> Option<i32> {
     if keywords.is_empty() {
         // If no meaningful keywords, fall back to checking if the full query matches
         return None;
     }
 
+    let name_lower = normalize_search_text(name);
+    let path_lower = normalize_search_text(path);
+
     let mut score = 0i32;
     let mut matched_keywords = 0;
 
     for keyword in keywords {
-        let kw_lower = keyword.to_lowercase();
+        let kw_lower = normalize_search_text(keyword);
 
         // Name exact match
         if name_lower == kw_lower {
@@ -699,6 +1360,37 @@ fn score_file_relevance(name_lower: &str, path_lower: &str, keywords: &[String])
     // Require at least one keyword to match
     if matched_keywords == 0 {
         return None;
+    }
+
+    Some(score)
+}
+
+fn file_matches_query(file: &FileInfo, query: &str) -> Option<i32> {
+    let query_lower = normalize_search_text(query);
+    let keywords = extract_meaningful_keywords(query);
+
+    let mut score =
+        if let Some(keyword_score) = score_file_relevance(&file.name, &file.path, &keywords) {
+            keyword_score
+        } else {
+            let name_lower = normalize_search_text(&file.name);
+            let path_lower = normalize_search_text(&file.path);
+
+            if name_lower == query_lower {
+                1000
+            } else if name_lower.starts_with(&query_lower) {
+                500
+            } else if name_lower.contains(&query_lower) {
+                300
+            } else if path_lower.contains(&query_lower) {
+                100
+            } else {
+                return None;
+            }
+        };
+
+    if file.is_dir {
+        score += 10;
     }
 
     Some(score)
@@ -764,239 +1456,187 @@ fn run_ocr(app: &tauri::AppHandle, path: &str) -> String {
     }
 }
 
-fn build_file_index() -> Vec<FileInfo> {
-    let mut files = Vec::with_capacity(10000);
+fn runtime_search_roots(
+    query: &str,
+    roots: &[PathBuf],
+    max_depth: usize,
+    max_visited: usize,
+    result_limit: usize,
+) -> Vec<(FileInfo, i32)> {
+    let skip_dirs = file_search_skip_dirs();
+    let mut results = Vec::new();
+    let mut seen_paths = HashSet::new();
+    let mut visited = 0usize;
+    let query_basename = normalize_search_text(query.trim());
 
-    #[cfg(target_os = "windows")]
-    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
-    #[cfg(not(target_os = "windows"))]
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    for root in roots {
+        if visited >= max_visited {
+            break;
+        }
+        if !root.exists() {
+            continue;
+        }
 
-    let skip_dirs: std::collections::HashSet<&str> = [
-        "node_modules",
-        ".git",
-        "target",
-        "build",
-        "dist",
-        ".cache",
-        "Caches",
-        "Trash",
-        ".Trash",
-        "Library",
-        ".npm",
-        ".cargo",
-        ".rustup",
-        ".vscode",
-        ".idea",
-        "vendor",
-        "bin",
-        "obj",
-        "out",
-        "logs",
-        // Windows-specific
-        "AppData",
-        "Application Data",
-        "Cookies",
-        "Recent",
-        "SendTo",
-        "Start Menu",
-        "Templates",
-        "NetHood",
-        "PrintHood",
-        "Local Settings",
-        "My Documents",
-        // Linux-specific
-        "proc",
-        "sys",
-        "dev",
-        "run",
-        "snap",
-        "flatpak",
-    ]
-    .iter()
-    .cloned()
-    .collect();
-
-    let walker = walkdir::WalkDir::new(&home)
-        .max_depth(6)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !name.starts_with('.') && !skip_dirs.contains(name.as_ref())
-        });
-
-    for entry in walker {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            let is_dir = entry.file_type().is_dir();
-
-            if let Some(name) = path.file_name() {
-                let name_str = name.to_string_lossy().to_string();
-                let path_str = path.to_string_lossy().to_string();
-
-                files.push(FileInfo {
-                    name: name_str,
-                    path: path_str,
-                    is_dir,
+        let root_budget = max_visited.saturating_sub(visited).min(8_000).max(500);
+        let mut root_visited = 0usize;
+        let skip_dirs = skip_dirs.clone();
+        let walker = jwalk::WalkDir::new(root)
+            .max_depth(max_depth)
+            .follow_links(false)
+            .process_read_dir(move |_depth, _path, _read_dir_state, children| {
+                children.retain(|entry| {
+                    let Ok(entry) = entry else {
+                        return false;
+                    };
+                    let name = entry.file_name.to_string_lossy();
+                    should_index_entry_name(name.as_ref()) && !skip_dirs.contains(name.as_ref())
                 });
+            })
+            .into_iter();
 
-                if files.len() >= 50000 {
+        for entry in walker {
+            if visited >= max_visited || root_visited >= root_budget {
+                break;
+            }
+
+            let Ok(entry) = entry else {
+                continue;
+            };
+            visited += 1;
+            root_visited += 1;
+
+            if entry.file_type().is_symlink() {
+                continue;
+            }
+
+            let path = entry.path();
+            if !seen_paths.insert(path.to_path_buf()) {
+                continue;
+            }
+
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let name_str = name.to_string_lossy().to_string();
+            if !should_index_entry_name(&name_str) {
+                continue;
+            }
+
+            let file = FileInfo {
+                name: name_str,
+                path: path.to_string_lossy().to_string(),
+                is_dir: entry.file_type().is_dir(),
+            };
+
+            if let Some(score) = file_matches_query(&file, query) {
+                // Runtime results get small boost because priority roots are searched first.
+                results.push((file, score + 25));
+                results.sort_by(|a, b| b.1.cmp(&a.1));
+                results.truncate(result_limit);
+
+                let has_exact = results
+                    .iter()
+                    .any(|(file, _)| normalize_search_text(&file.name) == query_basename);
+                if has_exact && root_visited > 1_500 {
                     break;
                 }
             }
         }
     }
 
-    files
-}
-
-#[tauri::command]
-fn search_files(query: String) -> Result<Vec<FileInfo>, String> {
-    let index_arc = get_or_create_index();
-
-    {
-        let index = index_arc.lock().unwrap();
-        if should_refresh_index(&index) {
-            drop(index);
-            let new_files = build_file_index();
-            let mut index = index_arc.lock().unwrap();
-            index.files = new_files;
-            index.last_updated = Some(Instant::now());
-        }
-    }
-
-    let index = index_arc.lock().unwrap();
-    let query_lower = query.to_lowercase();
-    let keywords = extract_meaningful_keywords(&query);
-
-    let mut results: Vec<(FileInfo, i32)> = index
-        .files
-        .iter()
-        .filter_map(|file| {
-            let name_lower = file.name.to_lowercase();
-            let path_lower = file.path.to_lowercase();
-
-            let mut score: i32;
-
-            // Try keyword-based matching first
-            if let Some(keyword_score) = score_file_relevance(&name_lower, &path_lower, &keywords) {
-                score = keyword_score;
-            } else {
-                // Fallback: full query string matching
-                if name_lower == query_lower {
-                    score = 1000;
-                } else if name_lower.starts_with(&query_lower) {
-                    score = 500;
-                } else if name_lower.contains(&query_lower) {
-                    score = 300;
-                } else if path_lower.contains(&query_lower) {
-                    score = 100;
-                } else {
-                    return None;
-                }
-            }
-
-            // Boost directories slightly when searching
-            if file.is_dir {
-                score += 10;
-            }
-
-            Some((file.clone(), score))
-        })
-        .collect();
-
-    // Sort by score descending
     results.sort_by(|a, b| b.1.cmp(&a.1));
+    results.truncate(result_limit);
+    results
+}
 
-    // Return top 50 results
-    let final_results: Vec<FileInfo> = results.into_iter().take(50).map(|(file, _)| file).collect();
+fn runtime_search_files(query: &str, result_limit: usize) -> Vec<(FileInfo, i32)> {
+    runtime_search_roots(
+        query,
+        &default_search_roots(),
+        configured_file_search_max_depth(),
+        RUNTIME_FILE_SEARCH_MAX_VISITED,
+        result_limit,
+    )
+}
 
-    Ok(final_results)
+fn path_is_under_search_roots(path: &Path) -> bool {
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+
+    default_search_roots()
+        .iter()
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .any(|root| canonical_path.starts_with(root))
 }
 
 #[tauri::command]
-fn smart_search_files(query: String) -> Result<Vec<SmartFileInfo>, String> {
-    let index_arc = get_or_create_index();
+async fn search_files(app: tauri::AppHandle, query: String) -> Result<Vec<FileInfo>, String> {
+    run_blocking(move || search_files_blocking(app, query)).await?
+}
 
-    {
-        let index = index_arc.lock().unwrap();
-        if should_refresh_index(&index) {
-            drop(index);
-            let new_files = build_file_index();
-            let mut index = index_arc.lock().unwrap();
-            index.files = new_files;
-            index.last_updated = Some(Instant::now());
-        }
-    }
+#[tauri::command]
+async fn launcher_search_files(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<FileInfo>, String> {
+    run_blocking(move || launcher_search_files_blocking(app, query)).await?
+}
 
-    let index = index_arc.lock().unwrap();
-    let query_lower = query.to_lowercase();
-    let keywords = extract_meaningful_keywords(&query);
+fn search_files_blocking(_app: tauri::AppHandle, query: String) -> Result<Vec<FileInfo>, String> {
+    let runtime_matches = runtime_search_files(&query, FILE_SEARCH_RESULT_LIMIT);
+    Ok(runtime_matches.into_iter().map(|(file, _)| file).collect())
+}
 
-    // Check for time-based filtering
+fn launcher_search_files_blocking(
+    _app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<FileInfo>, String> {
+    let runtime_matches = runtime_search_files(&query, FILE_SEARCH_RESULT_LIMIT);
+    Ok(runtime_matches.into_iter().map(|(file, _)| file).collect())
+}
+
+#[tauri::command]
+async fn smart_search_files(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<SmartFileInfo>, String> {
+    run_blocking(move || smart_search_files_blocking(app, query)).await?
+}
+
+fn smart_search_files_blocking(
+    _app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<SmartFileInfo>, String> {
     let time_filter = parse_time_filter(&query);
-    let _now = std::time::SystemTime::now();
 
-    // Get candidate files (up to 100)
-    let mut candidates: Vec<(FileInfo, i32)> = index
-        .files
-        .iter()
-        .filter_map(|file| {
-            let name_lower = file.name.to_lowercase();
-            let path_lower = file.path.to_lowercase();
-
-            let mut score: i32;
-
-            // Try keyword-based matching first
-            if let Some(keyword_score) = score_file_relevance(&name_lower, &path_lower, &keywords) {
-                score = keyword_score;
-            } else {
-                // Fallback: full query string matching
-                if name_lower == query_lower {
-                    score = 1000;
-                } else if name_lower.starts_with(&query_lower) {
-                    score = 500;
-                } else if name_lower.contains(&query_lower) {
-                    score = 300;
-                } else if path_lower.contains(&query_lower) {
-                    score = 100;
-                } else {
-                    return None;
-                }
-            }
-
-            // Boost directories slightly when searching
-            if file.is_dir {
-                score += 10;
-            }
-
-            Some((file.clone(), score))
-        })
-        .collect();
-
-    // Sort by score descending
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
-    candidates.truncate(100);
-    drop(index); // Release the lock before doing file I/O
-
-    // Extract metadata for each candidate
+    let candidates = runtime_search_files(&query, SMART_FILE_SEARCH_CANDIDATE_LIMIT);
     let mut results = Vec::with_capacity(candidates.len());
 
     for (file_info, _score) in candidates {
         let path = std::path::Path::new(&file_info.path);
 
-        // Get file metadata
-        let (created, modified, size) = match std::fs::metadata(path) {
-            Ok(meta) => {
-                let created = meta.created().ok().and_then(system_time_to_iso);
-                let modified = meta.modified().ok().and_then(system_time_to_iso);
-                let size = meta.len();
-                (created, modified, size)
-            }
-            Err(_) => (None, None, 0),
+        // Get metadata without following symlinks. Symlink candidates can only come from stale indexes.
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => continue,
+            Ok(meta) => meta,
+            Err(_) => continue,
         };
 
+        let is_dir = metadata.is_dir();
+
+        let (created, modified, size) = {
+            let meta = &metadata;
+            let created = meta.created().ok().and_then(system_time_to_iso);
+            let modified = meta.modified().ok().and_then(system_time_to_iso);
+            let size = meta.len();
+            (created, modified, size)
+        };
+
+        /*
+         * Unsafe filenames still return metadata-only so search results remain predictable,
+         * but no file content is read or sent to the AI provider.
+         */
         // Apply time filter if present
         if let Some(min_timestamp) = time_filter {
             if let Some(ref modified_str) = modified {
@@ -1010,26 +1650,25 @@ fn smart_search_files(query: String) -> Result<Vec<SmartFileInfo>, String> {
             }
         }
 
-        // Read full content for text files (up to 100KB)
-        let (content_preview, full_content) = if !file_info.is_dir {
-            let full = read_full_content(path, 100_000);
+        // Safe reader opens with no-follow semantics, validates handle metadata, then reads from that same handle.
+        let (content_preview, full_content) = if is_dir {
+            (None, None)
+        } else {
+            let full = read_ai_file_content(path, 100_000);
             let preview = full.as_ref().map(|c| {
-                let mut s = c.replace('\n', " ").replace('\r', " ").replace('\t', " ");
-                if s.len() > 3000 {
-                    s.truncate(3000);
+                let mut s = c.replace(['\n', '\r', '\t'], " ");
+                if truncate_string_to_byte_boundary(&mut s, 3000) {
                     s.push_str("...");
                 }
                 s
             });
             (preview, full)
-        } else {
-            (None, None)
         };
 
         results.push(SmartFileInfo {
             name: file_info.name,
             path: file_info.path,
-            is_dir: file_info.is_dir,
+            is_dir,
             created,
             modified,
             size,
@@ -1039,6 +1678,33 @@ fn smart_search_files(query: String) -> Result<Vec<SmartFileInfo>, String> {
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+async fn read_file(path: String, max_bytes: Option<usize>) -> Result<String, String> {
+    run_blocking(move || read_file_blocking(path, max_bytes)).await?
+}
+
+fn read_file_blocking(path: String, max_bytes: Option<usize>) -> Result<String, String> {
+    let path = std::path::Path::new(&path);
+
+    if !path.is_absolute() {
+        return Err("File path must be an absolute path returned by search_files".to_string());
+    }
+
+    is_safe_ai_read_path(path)?;
+
+    if !path_is_under_search_roots(path) {
+        return Err("File is outside searchable user folders".to_string());
+    }
+
+    let limit = max_bytes
+        .unwrap_or(AI_READ_FILE_DEFAULT_BYTES)
+        .clamp(1, AI_READ_FILE_MAX_BYTES);
+
+    read_ai_file_content(path, limit).ok_or_else(|| {
+        "File could not be read as text, is too large, or permission was denied".to_string()
+    })
 }
 
 #[tauri::command]
@@ -1884,13 +2550,151 @@ fn request_terminal_close_confirmation<R: Runtime>(window: &tauri::Window<R>, re
     let _ = window.emit("terminal-close-requested", reason.to_string());
 }
 
-#[tauri::command]
-fn hide_main_window(window: tauri::Window) -> Result<(), String> {
+fn record_previous_focus<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(state) = app.try_state::<PreviousFocusState>() else {
+        return;
+    };
+    let target = capture_previous_focus_target();
+    match state.target.lock() {
+        Ok(mut previous) => *previous = target,
+        Err(_) => {}
+    };
+}
+
+fn restore_previous_focus<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(state) = app.try_state::<PreviousFocusState>() else {
+        return;
+    };
+    let target = state
+        .target
+        .lock()
+        .ok()
+        .and_then(|mut previous| previous.take());
+    if let Some(target) = target {
+        restore_previous_focus_target(target);
+    }
+}
+
+fn hide_window<R: Runtime>(window: &tauri::Window<R>, restore_focus: bool) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())?;
     window
         .emit("window-hidden", ())
         .map_err(|e| e.to_string())?;
+    if restore_focus {
+        restore_previous_focus(&window.app_handle());
+    }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn capture_previous_focus_target() -> Option<PreviousFocusTarget> {
+    const GQUICK_BUNDLE_ID: &str = "com.gquick.app";
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "id of application (path to frontmost application as text)",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let bundle_identifier = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if bundle_identifier.is_empty() || bundle_identifier == GQUICK_BUNDLE_ID {
+        return None;
+    }
+    Some(PreviousFocusTarget { bundle_identifier })
+}
+
+#[cfg(target_os = "macos")]
+fn restore_previous_focus_target(target: PreviousFocusTarget) {
+    let script = format!(
+        "tell application id \"{}\" to activate",
+        target.bundle_identifier.replace('"', "\\\"")
+    );
+    let _ = Command::new("osascript").args(["-e", &script]).status();
+}
+
+#[cfg(target_os = "windows")]
+fn capture_previous_focus_target() -> Option<PreviousFocusTarget> {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    // Win32 foreground-window handles are process-global; store raw value only.
+    let hwnd: HWND = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        return None;
+    }
+    if foreground_window_is_current_process(hwnd) {
+        return None;
+    }
+    Some(PreviousFocusTarget {
+        hwnd: hwnd as usize,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn foreground_window_is_current_process(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    let mut process_id = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut process_id);
+    }
+    process_id != 0 && process_id == std::process::id()
+}
+
+#[cfg(target_os = "windows")]
+fn restore_previous_focus_target(target: PreviousFocusTarget) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let hwnd = target.hwnd as HWND;
+    // HWND may be stale if previous app closed. Win32 APIs fail silently here.
+    unsafe {
+        if IsWindow(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn capture_previous_focus_target() -> Option<PreviousFocusTarget> {
+    let output = Command::new("xdotool")
+        .arg("getactivewindow")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if window_id.is_empty() {
+        return None;
+    }
+    Some(PreviousFocusTarget { window_id })
+}
+
+#[cfg(target_os = "linux")]
+fn restore_previous_focus_target(target: PreviousFocusTarget) {
+    let _ = Command::new("xdotool")
+        .args(["windowactivate", &target.window_id])
+        .status();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn capture_previous_focus_target() -> Option<PreviousFocusTarget> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn restore_previous_focus_target(_target: PreviousFocusTarget) {}
+
+#[tauri::command]
+fn hide_main_window(window: tauri::Window) -> Result<(), String> {
+    hide_window(&window, true)
 }
 
 fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
@@ -3198,7 +4002,9 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
             }
             let _ = window.hide();
             let _ = window.emit("window-hidden", ());
+            restore_previous_focus(app);
         } else {
+            record_previous_focus(app);
             // Center window on primary monitor
             if let Ok(Some(monitor)) = app.primary_monitor() {
                 let monitor_size = monitor.size();
@@ -3400,6 +4206,10 @@ pub fn run() {
                 is_open: std::sync::Mutex::new(false),
             });
 
+            app.manage(PreviousFocusState {
+                target: Mutex::new(None),
+            });
+
             app.manage(TerminalState {
                 inline_processes: Arc::new(Mutex::new(HashMap::new())),
             });
@@ -3449,8 +4259,7 @@ pub fn run() {
                         api.prevent_close();
                         return;
                     }
-                    let _ = window.hide();
-                    let _ = window.emit("window-hidden", ());
+                    let _ = hide_window(window, true);
                     api.prevent_close();
                 }
             }
@@ -3467,8 +4276,7 @@ pub fn run() {
                             request_terminal_close_confirmation(window, "focus-lost");
                             return;
                         }
-                        let _ = window.hide();
-                        let _ = window.emit("window-hidden", ());
+                        let _ = hide_window(window, false);
                     }
                 }
             }
@@ -3496,7 +4304,9 @@ pub fn run() {
             open_app,
             capture_region,
             search_files,
+            launcher_search_files,
             smart_search_files,
+            read_file,
             open_file,
             update_main_shortcut,
             update_screenshot_shortcut,

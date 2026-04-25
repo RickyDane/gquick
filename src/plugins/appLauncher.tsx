@@ -30,7 +30,9 @@ export const appLauncherPlugin: GQuickPlugin = {
     return filtered.map((app) => {
       const appNameLower = app.name.toLowerCase();
       let score: number | undefined;
-      if (appNameLower.startsWith(queryLower)) {
+      if (appNameLower === queryLower) {
+        score = 120;
+      } else if (appNameLower.startsWith(queryLower)) {
         score = 100;
       } else if (appNameLower.includes(queryLower)) {
         score = 50;

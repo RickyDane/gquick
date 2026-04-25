@@ -100,6 +100,13 @@ interface InlineCommandState {
   error?: string;
 }
 
+interface SearchPluginResult {
+  requestId: number;
+  query: string;
+  pluginId: string;
+  items: SearchResultItem[];
+}
+
 function sortSearchResults(searchItems: SearchResultItem[]): SearchResultItem[] {
   return [...searchItems].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 }
@@ -201,6 +208,7 @@ function App() {
   const isLeftShiftPressedRef = useRef(false);
   const itemsRef = useRef<SearchResultItem[]>([]);
   const activeIndexRef = useRef(0);
+  const searchListRef = useRef<HTMLDivElement>(null);
 
   // Chat State
   const [messages, setMessages] = useState<Message[]>([
@@ -214,6 +222,7 @@ function App() {
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   const [inlineCommand, setInlineCommand] = useState<InlineCommandState | null>(null);
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
@@ -224,6 +233,12 @@ function App() {
   const [dockerSearchQuery, setDockerSearchQuery] = useState("");
   const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
+  const searchRequestIdRef = useRef(0);
+  const latestSearchQueryRef = useRef(query);
+  const latestSearchViewRef = useRef(view);
+
+  latestSearchQueryRef.current = query;
+  latestSearchViewRef.current = view;
 
   useEffect(() => {
     inlineCommandRef.current = inlineCommand;
@@ -236,6 +251,12 @@ function App() {
   useEffect(() => {
     activeIndexRef.current = activeIndex;
   }, [activeIndex]);
+
+  useEffect(() => {
+    if (view === "search" && query && items.length > 0) {
+      searchListRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [items, view, query]);
 
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
@@ -391,9 +412,10 @@ function App() {
   // Reset to idle search state when window is hidden
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let disposed = false;
 
     const setupListener = async () => {
-      unlisten = await listen("window-hidden", () => {
+      const cleanup = await listen("window-hidden", () => {
         setView("search");
         setQuery("");
         setActiveIndex(0);
@@ -403,6 +425,7 @@ function App() {
         setDockerInitialImage(null);
         setIsTranslating(false);
         setIsSearching(false);
+        setSearchStatus(null);
         setInlineCommand(null);
         setAttachedImages([]);
         setNotesContext(null);
@@ -410,11 +433,14 @@ function App() {
         setNotesSearchQuery("");
         setDockerSearchQuery("");
       });
+      if (disposed) cleanup();
+      else unlisten = cleanup;
     };
 
     setupListener();
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, []);
@@ -446,6 +472,7 @@ function App() {
   // Focus search input when window is shown and on initial mount
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let disposed = false;
 
     const focusInput = () => {
       // Small delay to ensure the webview is ready to receive focus
@@ -455,13 +482,16 @@ function App() {
     };
 
     const setupListener = async () => {
-      unlisten = await listen("window-shown", focusInput);
+      const cleanup = await listen("window-shown", focusInput);
+      if (disposed) cleanup();
+      else unlisten = cleanup;
     };
 
     setupListener();
     focusInput(); // Also focus on initial mount
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, []);
@@ -634,8 +664,9 @@ function App() {
   useEffect(() => {
     let unlistenClose: UnlistenFn | undefined;
     let unlistenOutput: UnlistenFn | undefined;
+    let disposed = false;
     const setupListener = async () => {
-      unlistenClose = await listen("terminal-close-requested", async () => {
+      const cleanupClose = await listen("terminal-close-requested", async () => {
         const canHide = await confirmCancelInlineCommand(true);
         if (canHide) {
           await invoke("hide_main_window").catch((error) => {
@@ -646,8 +677,10 @@ function App() {
           await getCurrentWindow().setFocus().catch(() => {});
         }
       });
+      if (disposed) cleanupClose();
+      else unlistenClose = cleanupClose;
 
-      unlistenOutput = await listen<InlineTerminalOutputEvent>("terminal-command-output", (event) => {
+      const cleanupOutput = await listen<InlineTerminalOutputEvent>("terminal-command-output", (event) => {
         const { id, stream, chunk } = event.payload;
         setInlineCommand(prev => {
           if (!prev || prev.id !== id || prev.status !== "running") return prev;
@@ -659,9 +692,12 @@ function App() {
           return next;
         });
       });
+      if (disposed) cleanupOutput();
+      else unlistenOutput = cleanupOutput;
     };
     setupListener();
     return () => {
+      disposed = true;
       unlistenClose?.();
       unlistenOutput?.();
     };
@@ -792,9 +828,11 @@ function App() {
   // Fetch items from plugins
   useEffect(() => {
     if (view !== "search" || !query) {
+      searchRequestIdRef.current += 1;
       setItems([]);
       setIsTranslating(false);
       setIsSearching(false);
+      setSearchStatus(null);
       return;
     }
 
@@ -802,8 +840,10 @@ function App() {
     const terminalCommand = getTerminalCommand(query);
 
     if (terminalCommand !== null) {
+      searchRequestIdRef.current += 1;
       setIsTranslating(false);
       setIsSearching(false);
+      setSearchStatus(null);
 
       if (terminalCommand.length === 0) {
         setItems([{
@@ -838,6 +878,8 @@ function App() {
       // Handle quick translate directly with loading state
       // Use 400ms debounce for API calls to reduce unnecessary requests
       setIsTranslating(true);
+      setIsSearching(false);
+      setSearchStatus(null);
       setItems([]);
 
       const doTranslate = async () => {
@@ -882,70 +924,116 @@ function App() {
     // Application launcher and lightweight plugins use raw input immediately.
     // Expensive plugins opt into debounce via metadata.
     let cancelled = false;
-    let immediateItems: SearchResultItem[] = [];
-    let pendingDebouncedSearches = 0;
-    let hasPublishedForQuery = false;
+    const requestQuery = query;
+    const requestId = ++searchRequestIdRef.current;
+    const isCurrentRequest = () =>
+      !cancelled &&
+      searchRequestIdRef.current === requestId &&
+      latestSearchQueryRef.current === requestQuery &&
+      latestSearchViewRef.current === "search";
+    const immediateItemsByPlugin = new Map<string, SearchResultItem[]>();
+    let pendingSearches = 0;
     const debouncedItemsByPlugin = new Map<string, SearchResultItem[]>();
 
+    const startPluginSearch = (pluginId: string) => {
+      pendingSearches += 1;
+      setIsSearching(true);
+      setSearchStatus(statusForPlugin(pluginId));
+    };
+
+    const endPluginSearch = () => {
+      pendingSearches = Math.max(pendingSearches - 1, 0);
+      if (isCurrentRequest()) {
+        const stillSearching = pendingSearches > 0;
+        setIsSearching(stillSearching);
+        if (!stillSearching) setSearchStatus(null);
+      }
+    };
+
     const publishItems = () => {
-      if (cancelled) return;
-      const shouldPreserveSelection = hasPublishedForQuery;
-      const selectedItemId = itemsRef.current[activeIndexRef.current]?.id;
+      if (!isCurrentRequest()) return;
+      const immediateItems = Array.from(immediateItemsByPlugin.values()).flat();
       const debouncedItems = Array.from(debouncedItemsByPlugin.values()).flat();
       const nextItems = sortSearchResults([...immediateItems, ...debouncedItems]);
 
       itemsRef.current = nextItems;
       setItems(nextItems);
-      setActiveIndex(currentIndex => {
-        if (shouldPreserveSelection && selectedItemId) {
-          const nextSelectedIndex = nextItems.findIndex(item => item.id === selectedItemId);
-          if (nextSelectedIndex !== -1) return nextSelectedIndex;
-        }
-        if (!shouldPreserveSelection) return 0;
-        return Math.min(currentIndex, Math.max(nextItems.length - 1, 0));
-      });
-      hasPublishedForQuery = true;
+      setActiveIndex(0);
     };
 
-    const queryPlugins = getPluginsForQuery(query);
-    const immediatePlugins = queryPlugins.filter(plugin => plugin.searchDebounceMs === undefined);
-    const debouncedPlugins = queryPlugins.filter(plugin => plugin.searchDebounceMs !== undefined);
+    const queryPlugins = getPluginsForQuery(query).filter(plugin => plugin.shouldSearch?.(query) ?? true);
+    const getPluginDebounceMs = (plugin: (typeof queryPlugins)[number]) =>
+      plugin.getSearchDebounceMs?.(query) ?? plugin.searchDebounceMs;
+    const immediatePlugins = queryPlugins.filter(plugin => getPluginDebounceMs(plugin) === undefined);
+    const debouncedPlugins = queryPlugins.filter(plugin => getPluginDebounceMs(plugin) !== undefined);
 
-    const fetchImmediateItems = async () => {
+    itemsRef.current = [];
+    setItems([]);
+
+    const statusForPlugin = (pluginId: string) => {
+      if (pluginId === "file-search") {
+        if (isSmartSearchQuery(query)) return "Searching files…";
+        return "Searching files…";
+      }
+      if (pluginId === "docker") return "Searching Docker Hub and local images…";
+      return "Searching…";
+    };
+
+    const fetchPluginItems = async (plugin: (typeof queryPlugins)[number]): Promise<SearchPluginResult> => ({
+      requestId,
+      query: requestQuery,
+      pluginId: plugin.metadata.id,
+      items: await plugin.getItems(requestQuery),
+    });
+
+    const applyPluginResult = (result: SearchPluginResult, target: Map<string, SearchResultItem[]>) => {
+      if (
+        result.requestId !== requestId ||
+        result.query !== requestQuery ||
+        !isCurrentRequest()
+      ) return false;
+
+      target.set(result.pluginId, result.items);
+      publishItems();
+      return true;
+    };
+
+    const fetchImmediateItems = async (plugin: (typeof queryPlugins)[number]) => {
       try {
-        const itemLists = await Promise.all(immediatePlugins.map(plugin => plugin.getItems(query)));
-        immediateItems = itemLists.flat();
-        publishItems();
+        const result = await fetchPluginItems(plugin);
+        applyPluginResult(result, immediateItemsByPlugin);
       } catch (error) {
-        console.error("Immediate search error:", error);
+        console.error(`Immediate search error (${plugin.metadata.id}):`, error);
       }
     };
 
-    void fetchImmediateItems();
+    immediatePlugins.forEach(plugin => {
+      startPluginSearch(plugin.metadata.id);
+      void fetchImmediateItems(plugin).finally(endPluginSearch);
+    });
 
-    const timers = debouncedPlugins.map(plugin =>
-      window.setTimeout(async () => {
-        if (cancelled) return;
+    const timers = debouncedPlugins.map(plugin => {
+      const debounceMs = getPluginDebounceMs(plugin) ?? 0;
+      return window.setTimeout(async () => {
+        if (!isCurrentRequest()) return;
 
-        pendingDebouncedSearches += 1;
-        setIsSearching(true);
+        startPluginSearch(plugin.metadata.id);
         try {
-          const pluginItems = await plugin.getItems(query);
-          debouncedItemsByPlugin.set(plugin.metadata.id, pluginItems);
-          publishItems();
+          const result = await fetchPluginItems(plugin);
+          applyPluginResult(result, debouncedItemsByPlugin);
         } catch (error) {
           console.error(`Debounced search error (${plugin.metadata.id}):`, error);
         } finally {
-          pendingDebouncedSearches = Math.max(pendingDebouncedSearches - 1, 0);
-          if (!cancelled) setIsSearching(pendingDebouncedSearches > 0);
+          endPluginSearch();
         }
-      }, plugin.searchDebounceMs)
-    );
+      }, debounceMs);
+    });
 
     return () => {
       cancelled = true;
       timers.forEach(window.clearTimeout);
       setIsSearching(false);
+      setSearchStatus(null);
     };
   }, [query, view, runExternalTerminalCommand, inlineCommand?.status, inlineCommand?.command]);
 
@@ -1292,7 +1380,13 @@ function App() {
             else if (view === "notes") setNotesSearchQuery(e.target.value);
             else if (view === "docker") setDockerSearchQuery(e.target.value);
             else {
-              setQuery(e.target.value);
+              const nextQuery = e.target.value;
+              if (nextQuery === query) return;
+              latestSearchQueryRef.current = nextQuery;
+              searchRequestIdRef.current += 1;
+              itemsRef.current = [];
+              setItems([]);
+              setQuery(nextQuery);
               setActiveIndex(0);
             }
           }}
@@ -1552,23 +1646,11 @@ function App() {
             </div>
           </div>
         ) : query ? (
-          <div className="max-h-[500px] overflow-y-auto p-2">
+          <div ref={searchListRef} className="max-h-[500px] overflow-y-auto p-2">
             {isTranslating && (
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Translating...
-              </div>
-            )}
-            {isSearching && isSmartSearchQuery(query) && (
-              <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Analyzing files with AI...
-              </div>
-            )}
-            {isSearching && /^docker\s*:/i.test(query.trim()) && (
-              <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Searching Docker Hub and local images...
               </div>
             )}
             {inlineCommand && getTerminalCommand(query) !== null && (
@@ -1690,9 +1772,19 @@ function App() {
                   );
                 })}
               </div>
+            ) : isSearching || isTranslating ? (
+              <div className="p-6 text-center">
+                <p className="text-sm text-zinc-500 italic font-medium">Waiting for results…</p>
+              </div>
             ) : (
               <div className="p-6 text-center">
                 <p className="text-sm text-zinc-400 italic font-medium">No results found for "{query}"</p>
+              </div>
+            )}
+            {isSearching && searchStatus && (
+              <div className="mt-2 flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {searchStatus}
               </div>
             )}
           </div>

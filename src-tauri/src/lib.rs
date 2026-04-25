@@ -581,7 +581,7 @@ struct SmartFileInfo {
 }
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Read};
+use std::io::Read;
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -2003,7 +2003,7 @@ fn command_stdout_with_timeout(mut command: Command, timeout: Duration) -> Optio
         // shell pipelines and child commands, not only the direct child.
         command.pre_exec(|| {
             if libc::setsid() == -1 {
-                Err(io::Error::last_os_error())
+                Err(std::io::Error::last_os_error())
             } else {
                 Ok(())
             }
@@ -2248,7 +2248,7 @@ fn inline_shell_command(command: &str) -> Command {
         // terminate commands it spawned instead of only killing the shell.
         cmd.pre_exec(|| {
             if libc::setsid() == -1 {
-                Err(io::Error::last_os_error())
+                Err(std::io::Error::last_os_error())
             } else {
                 Ok(())
             }

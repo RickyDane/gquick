@@ -424,3 +424,7 @@ Based on code analysis, the project is in **active development with core feature
 - CSP allows `https:` and `http://localhost:*` connections
 - `macos-private-api` enabled in Tauri config
 - No encryption for chat history or file index data
+
+## Build / CI
+
+The project uses a GitHub Actions workflow (`.github/workflows/build.yml`) to build cross-platform releases for Linux, Windows, and macOS ARM64. macOS builds are automatically **code-signed and notarized** via Apple Developer ID certificates injected as GitHub secrets during CI. Updater artifacts are signed with a Tauri private key.

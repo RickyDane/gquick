@@ -109,4 +109,6 @@ The `beforeBundleCommand` OCR bundling script also reads `APPLE_SIGNING_IDENTITY
 
 After `tauri build`, CI performs a final macOS-only notarization pass over the generated `.dmg`: it verifies the `.app` signature, signs the `.dmg` with the Developer ID Application identity, submits the `.dmg` with `notarytool --wait`, staples the notarization ticket, and validates the stapled installer with Gatekeeper. This ensures the uploaded release `.dmg` is the notarized/stapled artifact users install from.
 
+CI recreates the `.dmg` from the verified signed `.app` bundle with `ditto` before final DMG notarization. This avoids distributing a Tauri-generated DMG that may contain a pre-final-signing copy of the app bundle.
+
 Download and install the signed `.dmg` artifact for macOS. Do not distribute or open the raw `.app` bundle from a GitHub Actions artifact ZIP; re-zipping `.app` directories can break macOS code signature metadata and trigger "app is damaged" Gatekeeper errors.

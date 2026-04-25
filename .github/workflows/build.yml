@@ -222,6 +222,22 @@ jobs:
             spctl -a -vvv -t exec "$app" || echo "::warning::spctl app assessment did not pass before final DMG notarization: $app"
           done
 
+          signed_app="${app_bundles[0]}"
+          for dmg in "${dmg_files[@]}"; do
+            echo "Recreating DMG from verified signed app bundle: $dmg"
+            staging_dir="$(mktemp -d)"
+            ditto "$signed_app" "$staging_dir/$(basename "$signed_app")"
+            ln -s /Applications "$staging_dir/Applications"
+            rm -f "$dmg"
+            hdiutil create \
+              -volname "GQuick" \
+              -srcfolder "$staging_dir" \
+              -ov \
+              -format UDZO \
+              "$dmg"
+            rm -rf "$staging_dir"
+          done
+
           for dmg in "${dmg_files[@]}"; do
             echo "Signing DMG: $dmg"
             codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"

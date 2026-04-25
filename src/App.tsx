@@ -96,6 +96,10 @@ interface InlineCommandState {
   error?: string;
 }
 
+function sortSearchResults(searchItems: SearchResultItem[]): SearchResultItem[] {
+  return [...searchItems].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
+
 const INTERACTIVE_TERMINAL_COMMANDS = new Set([
   "ssh", "sudo", "su", "vim", "vi", "nvim", "nano", "emacs", "less", "more",
   "top", "htop", "watch", "passwd", "mysql", "psql", "sqlite3", "ftp", "sftp",
@@ -191,6 +195,8 @@ function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const actionsScrollRef = useRef<HTMLDivElement>(null);
   const isLeftShiftPressedRef = useRef(false);
+  const itemsRef = useRef<SearchResultItem[]>([]);
+  const activeIndexRef = useRef(0);
 
   // Chat State
   const [messages, setMessages] = useState<Message[]>([
@@ -212,6 +218,14 @@ function App() {
   useEffect(() => {
     inlineCommandRef.current = inlineCommand;
   }, [inlineCommand]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
 
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
@@ -730,6 +744,7 @@ function App() {
     if (view !== "search" || !query) {
       setItems([]);
       setIsTranslating(false);
+      setIsSearching(false);
       return;
     }
 
@@ -814,25 +829,73 @@ function App() {
       return () => clearTimeout(timer);
     }
 
-    // Normal search flow - 150ms debounce for better UX
-    const fetchItems = async () => {
-      setIsSearching(true);
-      try {
-        const allItemsLists = await Promise.all(
-          plugins.map(p => p.getItems(query))
-        );
+    // Application launcher and lightweight plugins use raw input immediately.
+    // Expensive plugins opt into debounce via metadata.
+    let cancelled = false;
+    let immediateItems: SearchResultItem[] = [];
+    let pendingDebouncedSearches = 0;
+    let hasPublishedForQuery = false;
+    const debouncedItemsByPlugin = new Map<string, SearchResultItem[]>();
 
-        const allItems = allItemsLists.flat();
-        // Sort by score descending (undefined/null treated as 0)
-        allItems.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-        setItems(allItems);
-      } finally {
-        setIsSearching(false);
+    const publishItems = () => {
+      if (cancelled) return;
+      const shouldPreserveSelection = hasPublishedForQuery;
+      const selectedItemId = itemsRef.current[activeIndexRef.current]?.id;
+      const debouncedItems = Array.from(debouncedItemsByPlugin.values()).flat();
+      const nextItems = sortSearchResults([...immediateItems, ...debouncedItems]);
+
+      itemsRef.current = nextItems;
+      setItems(nextItems);
+      setActiveIndex(currentIndex => {
+        if (shouldPreserveSelection && selectedItemId) {
+          const nextSelectedIndex = nextItems.findIndex(item => item.id === selectedItemId);
+          if (nextSelectedIndex !== -1) return nextSelectedIndex;
+        }
+        if (!shouldPreserveSelection) return 0;
+        return Math.min(currentIndex, Math.max(nextItems.length - 1, 0));
+      });
+      hasPublishedForQuery = true;
+    };
+
+    const immediatePlugins = plugins.filter(plugin => plugin.searchDebounceMs === undefined);
+    const debouncedPlugins = plugins.filter(plugin => plugin.searchDebounceMs !== undefined);
+
+    const fetchImmediateItems = async () => {
+      try {
+        const itemLists = await Promise.all(immediatePlugins.map(plugin => plugin.getItems(query)));
+        immediateItems = itemLists.flat();
+        publishItems();
+      } catch (error) {
+        console.error("Immediate search error:", error);
       }
     };
 
-    const timer = setTimeout(fetchItems, 150);
-    return () => clearTimeout(timer);
+    void fetchImmediateItems();
+
+    const timers = debouncedPlugins.map(plugin =>
+      window.setTimeout(async () => {
+        if (cancelled) return;
+
+        pendingDebouncedSearches += 1;
+        setIsSearching(true);
+        try {
+          const pluginItems = await plugin.getItems(query);
+          debouncedItemsByPlugin.set(plugin.metadata.id, pluginItems);
+          publishItems();
+        } catch (error) {
+          console.error(`Debounced search error (${plugin.metadata.id}):`, error);
+        } finally {
+          pendingDebouncedSearches = Math.max(pendingDebouncedSearches - 1, 0);
+          if (!cancelled) setIsSearching(pendingDebouncedSearches > 0);
+        }
+      }, plugin.searchDebounceMs)
+    );
+
+    return () => {
+      cancelled = true;
+      timers.forEach(window.clearTimeout);
+      setIsSearching(false);
+    };
   }, [query, view, runExternalTerminalCommand, inlineCommand?.status, inlineCommand?.command]);
 
   const totalItems = items.length;

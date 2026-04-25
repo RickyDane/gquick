@@ -270,6 +270,7 @@ export const translatePlugin: GQuickPlugin = {
     icon: Languages,
     keywords: ["translate", "translation", "language", "convert text"],
   },
+  searchDebounceMs: 150,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmed = query.trim().toLowerCase();
 

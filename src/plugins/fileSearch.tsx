@@ -159,6 +159,7 @@ export const fileSearchPlugin: GQuickPlugin = {
     icon: File,
     keywords: ["file", "folder", "open", "find"],
   },
+  searchDebounceMs: 150,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     if (!query || query.length < 2) {
       return [];

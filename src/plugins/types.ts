@@ -31,6 +31,8 @@ export interface SearchResultItem {
 
 export interface GQuickPlugin {
   metadata: PluginMetadata;
-  // New: Returns items based on query
+  // Optional search debounce for plugins that perform expensive work or API calls.
+  searchDebounceMs?: number;
+  // Returns items based on query
   getItems: (query: string) => Promise<SearchResultItem[]>;
 }

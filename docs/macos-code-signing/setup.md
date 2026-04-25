@@ -4,7 +4,9 @@ This guide covers the GitHub secrets required to code-sign and notarize the GQui
 
 ## Required GitHub Secrets
 
-Create these secrets in **Settings > Secrets and variables > Actions**:
+Create these secrets in **Settings > Secrets and variables > Actions > Repository secrets**.
+
+> Do not put these only under **Settings > Environments**. Environment secrets require the workflow job to attach to that exact environment, and if GitHub does not attach the environment, every secret resolves as empty. Repository secrets are available directly to this build workflow on trusted `push`, tag, and `workflow_dispatch` runs.
 
 | Secret | Description |
 |--------|-------------|

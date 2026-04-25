@@ -12,6 +12,7 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "
 const bundleRoot = path.join(repoRoot, "src-tauri", "macos-bundle");
 const frameworksDir = path.join(bundleRoot, "Frameworks");
 const tessdataDir = path.join(bundleRoot, "tessdata");
+const signingIdentity = process.env.APPLE_SIGNING_IDENTITY?.trim();
 
 fs.rmSync(bundleRoot, { recursive: true, force: true });
 fs.mkdirSync(frameworksDir, { recursive: true });
@@ -24,7 +25,18 @@ function run(cmd, args) {
 }
 
 function codesign(file) {
+  if (signingIdentity) {
+    run("codesign", ["--force", "--options", "runtime", "--timestamp", "--sign", signingIdentity, file]);
+    return;
+  }
+
   run("codesign", ["--force", "--sign", "-", "--timestamp=none", file]);
+}
+
+if (signingIdentity) {
+  console.log(`Signing bundled OCR libraries with identity: ${signingIdentity}`);
+} else {
+  console.log("APPLE_SIGNING_IDENTITY not set; using ad-hoc signing for bundled OCR libraries.");
 }
 
 function resolveTesseractPaths() {

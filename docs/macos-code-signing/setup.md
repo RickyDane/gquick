@@ -104,3 +104,5 @@ You should see `PKCS7 Encrypted data` and a `shrouded keybag`. If the file is co
 ## CI Behavior
 
 These secrets are injected only into the macOS ARM64 build job. Tauri v2 reads them automatically during `tauri build` to sign the `.app` bundle and submit it for notarization. No changes to `tauri.conf.json` are required.
+
+The `beforeBundleCommand` OCR bundling script also reads `APPLE_SIGNING_IDENTITY`. When present, it signs bundled Tesseract/OCR dylibs in `Contents/Resources/Frameworks` with the Developer ID identity and a secure timestamp before Tauri signs and notarizes the final app. Local builds without this secret continue to use ad-hoc signing.

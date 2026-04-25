@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   StickyNote,
@@ -12,6 +12,7 @@ import {
   Search,
   Check,
 } from "lucide-react";
+import { cn } from "../utils/cn";
 import { MarkdownMessage } from "./MarkdownMessage";
 
 export interface Note {
@@ -24,6 +25,7 @@ export interface Note {
 
 interface NotesViewProps {
   onClose?: () => void;
+  initialNoteId?: number;
 }
 
 function formatDate(iso?: string): string {
@@ -41,7 +43,7 @@ function formatDate(iso?: string): string {
   }
 }
 
-export function NotesView({ onClose }: NotesViewProps) {
+export function NotesView({ onClose, initialNoteId }: NotesViewProps) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
@@ -50,18 +52,38 @@ export function NotesView({ onClose }: NotesViewProps) {
   const [editContent, setEditContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const hasHandledInitialNote = useRef(false);
+
+  useEffect(() => {
+    hasHandledInitialNote.current = false;
+  }, [initialNoteId]);
+
+  const startEdit = useCallback((note: Note) => {
+    setEditingNote(note);
+    setEditTitle(note.title);
+    setEditContent(note.content);
+    setIsCreating(false);
+  }, []);
 
   const fetchNotes = useCallback(async () => {
     try {
       setLoading(true);
       const data = await invoke<Note[]>("get_notes");
       setNotes(data);
+
+      if (initialNoteId && !hasHandledInitialNote.current && !isCreating && !editingNote) {
+        const targetNote = data.find((n) => n.id === initialNoteId);
+        if (targetNote) {
+          startEdit(targetNote);
+        }
+        hasHandledInitialNote.current = true;
+      }
     } catch (e) {
       console.error("Failed to fetch notes:", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialNoteId, startEdit, isCreating, editingNote]);
 
   useEffect(() => {
     fetchNotes();
@@ -120,13 +142,6 @@ export function NotesView({ onClose }: NotesViewProps) {
     }
   };
 
-  const startEdit = (note: Note) => {
-    setEditingNote(note);
-    setEditTitle(note.title);
-    setEditContent(note.content);
-    setIsCreating(false);
-  };
-
   const startCreate = () => {
     setIsCreating(true);
     setEditingNote(null);
@@ -152,13 +167,8 @@ export function NotesView({ onClose }: NotesViewProps) {
   const isEditing = isCreating || editingNote !== null;
 
   return (
-    <div className="flex flex-col h-[300px] min-w-[500px]">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-        <div className="flex items-center gap-2">
-          <StickyNote className="h-4 w-4 text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-200">Notes</span>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className={cn("flex flex-col min-w-[500px]", isEditing ? "h-[420px]" : "h-[300px]")}>
+      <div className="flex items-center justify-end px-4 py-3 border-b border-white/5 gap-2">
           {!isEditing && (
             <>
               <div className="relative">
@@ -188,7 +198,6 @@ export function NotesView({ onClose }: NotesViewProps) {
               <X className="h-4 w-4" />
             </button>
           )}
-        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -205,7 +214,7 @@ export function NotesView({ onClose }: NotesViewProps) {
               value={editContent}
               onChange={(e) => setEditContent(e.target.value)}
               placeholder="Write your note in Markdown..."
-              rows={6}
+              rows={10}
               className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all resize-none"
             />
             <div className="flex items-center justify-end gap-2">

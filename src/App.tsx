@@ -212,6 +212,7 @@ function App() {
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
   const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
+  const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
   const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
 
@@ -302,10 +303,21 @@ function App() {
   // Listen for notes plugin requesting to open notes view
   useEffect(() => {
     const handleOpenNotes = () => {
+      setInitialNoteId(null);
       setView("notes");
     };
     window.addEventListener("gquick-open-notes", handleOpenNotes);
     return () => window.removeEventListener("gquick-open-notes", handleOpenNotes);
+  }, []);
+
+  useEffect(() => {
+    const handleOpenNote = (event: Event) => {
+      const noteId = (event as CustomEvent<number>).detail;
+      setInitialNoteId(noteId);
+      setView("notes");
+    };
+    window.addEventListener("gquick-open-note", handleOpenNote);
+    return () => window.removeEventListener("gquick-open-note", handleOpenNote);
   }, []);
 
   useEffect(() => {
@@ -361,6 +373,7 @@ function App() {
         setInlineCommand(null);
         setAttachedImages([]);
         setNotesContext(null);
+        setInitialNoteId(null);
       });
     };
 
@@ -665,6 +678,7 @@ function App() {
 
       if ((e.metaKey || e.ctrlKey) && e.key === "n" && view !== "actions") {
         e.preventDefault();
+        setInitialNoteId(null);
         setView("notes");
       }
 
@@ -903,7 +917,7 @@ function App() {
 
   const appActions = [
     { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} L⇧ C`, onClick: () => setView("chat") },
-    { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => setView("notes") },
+    { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => { setInitialNoteId(null); setView("notes"); } },
     { id: "docker", label: "Docker", icon: Box, shortcut: `${modKey} L⇧ D`, onClick: () => { setDockerInitialImage(null); setView("docker"); } },
     { id: "search-notes", label: "Search Notes", icon: Search, shortcut: `${modKey} ⇧ S`, onClick: () => { setView("search"); setQuery("search notes: "); inputRef.current?.focus(); } },
     { id: "settings", label: "Settings", icon: SettingsIcon, shortcut: `${modKey},`, onClick: () => setView("settings") },
@@ -1404,7 +1418,7 @@ function App() {
             </div>
           </div>
         ) : view === "notes" ? (
-          <NotesView onClose={() => setView("search")} />
+          <NotesView onClose={() => setView("search")} initialNoteId={initialNoteId ?? undefined} />
         ) : view === "docker" ? (
           <DockerView initialImage={dockerInitialImage} onClose={() => setView("search")} />
         ) : view === "chat" ? (

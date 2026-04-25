@@ -109,13 +109,8 @@ export const notesPlugin: GQuickPlugin = {
           subtitle: getPreview(note.content, 80),
           icon: StickyNote,
           score: 200,
-          onSelect: async () => {
-            try {
-              await navigator.clipboard.writeText(note.content);
-              await getCurrentWindow().hide();
-            } catch {
-              // ignore
-            }
+          onSelect: () => {
+            window.dispatchEvent(new CustomEvent("gquick-open-note", { detail: note.id }));
           },
         }));
       } catch (e) {

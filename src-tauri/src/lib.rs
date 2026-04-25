@@ -155,7 +155,10 @@ mod tests {
 
     #[test]
     fn escapes_like_wildcards_and_escape_character() {
-        assert_eq!(escape_like_pattern(r"100%_done\today"), r"100\%\_done\\today");
+        assert_eq!(
+            escape_like_pattern(r"100%_done\today"),
+            r"100\%\_done\\today"
+        );
     }
 }
 
@@ -225,6 +228,16 @@ struct DockerStatus {
 struct DockerCommandResult {
     stdout: String,
     stderr: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkInfo {
+    local_ip: String,
+    public_ip: String,
+    ssid: String,
+    vpn: String,
+    latency: String,
 }
 
 #[derive(serde::Serialize)]
@@ -314,6 +327,7 @@ struct SmartFileInfo {
 
 use std::collections::HashMap;
 use std::io::{self, Read};
+use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -1284,6 +1298,265 @@ fn read_pipe(
             .map_err(|e| e.to_string())?;
         Ok(output)
     })
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(child: &mut Child) {
+    let pid = child.id() as i32;
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    let started = Instant::now();
+    while started.elapsed() <= Duration::from_millis(300) {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_process_tree(child: &mut Child) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .status();
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn terminate_process_tree(child: &mut Child) {
+    let _ = child.kill();
+}
+
+fn command_stdout_with_timeout(mut command: Command, timeout: Duration) -> Option<String> {
+    #[cfg(unix)]
+    unsafe {
+        // Run each command in a new process group so timeout cleanup can stop
+        // shell pipelines and child commands, not only the direct child.
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout_handle = child.stdout.take().map(read_pipe);
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = stdout_handle.take()?.join().ok()?.ok()?;
+                return status.success().then_some(stdout.trim().to_string());
+            }
+            Ok(None) if started.elapsed() <= timeout => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                terminate_process_tree(&mut child);
+                let _ = child.wait();
+                if let Some(handle) = stdout_handle.take() {
+                    let _ = handle.join();
+                }
+                return None;
+            }
+        }
+    }
+}
+
+fn command_stdout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    command_stdout_with_timeout(command, timeout).filter(|output| !output.trim().is_empty())
+}
+
+fn shell_stdout(command: &str, timeout: Duration) -> Option<String> {
+    command_stdout_with_timeout(platform_shell_command(command), timeout)
+        .filter(|output| !output.trim().is_empty())
+}
+
+fn first_non_empty_command(commands: &[&str], timeout: Duration) -> Option<String> {
+    commands
+        .iter()
+        .find_map(|command| shell_stdout(command, timeout))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_ping_latency(output: &str) -> Option<String> {
+    let lower = output.to_lowercase();
+    let markers = ["time=", "time<"];
+
+    for marker in markers {
+        if let Some(start) = lower.find(marker) {
+            let value_start = start + marker.len();
+            let value = lower[value_start..]
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches("ms")
+                .trim();
+
+            if !value.is_empty() {
+                return Some(format!("{} ms", value));
+            }
+        }
+    }
+
+    None
+}
+
+fn normalize_unavailable(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Unavailable".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_default_interface(route_output: &str) -> Option<String> {
+    route_output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("interface:")
+            .map(str::trim)
+            .filter(|iface| !iface.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_wifi_ssid(output: &str) -> Option<String> {
+    let ssid = output
+        .trim()
+        .strip_prefix("Current Wi-Fi Network:")
+        .map(str::trim)
+        .unwrap_or_else(|| output.trim());
+    let lower = ssid.to_lowercase();
+
+    (!ssid.is_empty()
+        && !lower.contains("not associated")
+        && !lower.contains("could not find")
+        && !lower.contains("error"))
+    .then_some(ssid.to_string())
+}
+
+fn get_local_network_info() -> NetworkInfo {
+    let timeout = Duration::from_millis(1_500);
+    let ping_timeout = Duration::from_millis(2_000);
+
+    #[cfg(target_os = "macos")]
+    let (local_ip, ssid, vpn, ping_output) = {
+        let default_iface = command_stdout("route", &["-n", "get", "default"], timeout)
+            .as_deref()
+            .and_then(parse_macos_default_interface);
+        let local_ip = default_iface
+            .as_deref()
+            .and_then(|iface| command_stdout("ipconfig", &["getifaddr", iface], timeout))
+            .or_else(|| {
+                first_non_empty_command(
+                    &[
+                        "ipconfig getifaddr en0",
+                        "ipconfig getifaddr en1",
+                        "ifconfig | awk '/inet / && $2 != \"127.0.0.1\" {print $2; exit}'",
+                    ],
+                    timeout,
+                )
+            });
+        let ssid = default_iface
+            .as_deref()
+            .and_then(|iface| {
+                command_stdout("networksetup", &["-getairportnetwork", iface], timeout)
+            })
+            .or_else(|| command_stdout("networksetup", &["-getairportnetwork", "en0"], timeout))
+            .as_deref()
+            .and_then(parse_macos_wifi_ssid);
+        let vpn = shell_stdout("scutil --nc list 2>/dev/null | awk '/Connected/ {match($0, /\\\"[^\\\"]+\\\"/); if (RSTART) {print substr($0, RSTART + 1, RLENGTH - 2); exit}}'", timeout)
+            .map(|name| format!("Yes ({})", name))
+            .or_else(|| shell_stdout("ifconfig | awk '/^(ppp|ipsec)[0-9]*:/ {iface=$1} /status: active/ && iface {gsub(\":\", \"\", iface); print \"Yes (\" iface \")\"; exit}'", timeout))
+            .or_else(|| Some("No".to_string()));
+        let ping_output =
+            command_stdout("ping", &["-c", "1", "-W", "1000", "1.1.1.1"], ping_timeout);
+        (local_ip, ssid, vpn, ping_output)
+    };
+
+    #[cfg(target_os = "windows")]
+    let (local_ip, ssid, vpn, ping_output) = {
+        let local_ip = shell_stdout("powershell -NoProfile -Command \"(Get-NetIPConfiguration | Where-Object {$_.IPv4DefaultGateway -and $_.IPv4Address} | Select-Object -First 1).IPv4Address.IPAddress\"", timeout);
+        let ssid = shell_stdout("netsh wlan show interfaces | powershell -NoProfile -Command \"$input | Where-Object {$_ -match '^\\s*SSID\\s*:' -and $_ -notmatch 'BSSID'} | Select-Object -First 1 | ForEach-Object {($_ -split ':',2)[1].Trim()}\"", timeout);
+        let vpn = shell_stdout("powershell -NoProfile -Command \"$vpn = Get-VpnConnection -ErrorAction SilentlyContinue | Where-Object {$_.ConnectionStatus -eq 'Connected'} | Select-Object -First 1; if ($vpn) { 'Yes (' + $vpn.Name + ')' } else { 'No' }\"", timeout)
+            .or_else(|| Some("Unavailable".to_string()));
+        let ping_output = shell_stdout("ping -n 1 -w 1000 1.1.1.1", ping_timeout);
+        (local_ip, ssid, vpn, ping_output)
+    };
+
+    #[cfg(target_os = "linux")]
+    let (local_ip, ssid, vpn, ping_output) = {
+        let local_ip = first_non_empty_command(&[
+            "hostname -I | awk '{print $1}'",
+            "ip route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i == \"src\") {print $(i+1); exit}}'",
+        ], timeout);
+        let ssid = first_non_empty_command(
+            &[
+                "iwgetid -r",
+                "nmcli -t -f active,ssid dev wifi | awk -F: '$1 == \"yes\" {print $2; exit}'",
+            ],
+            timeout,
+        );
+        let vpn = shell_stdout(
+            "ip -o link show up | awk -F': ' '/tun|tap|wg|ppp/ {print \"Yes (\" $2 \")\"; exit}'",
+            timeout,
+        )
+        .or_else(|| Some("No".to_string()));
+        let ping_output = shell_stdout("ping -c 1 -W 1 1.1.1.1", ping_timeout);
+        (local_ip, ssid, vpn, ping_output)
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let (local_ip, ssid, vpn, ping_output) = (None, None, None, None);
+
+    NetworkInfo {
+        local_ip: normalize_unavailable(local_ip),
+        public_ip: "Unavailable".to_string(),
+        ssid: normalize_unavailable(ssid),
+        vpn: normalize_unavailable(vpn),
+        latency: normalize_unavailable(ping_output.as_deref().and_then(parse_ping_latency)),
+    }
+}
+
+async fn get_public_ip() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1_500))
+        .build()
+        .ok()?;
+    let response = client.get("https://api.ipify.org").send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let body = response.text().await.ok()?;
+    let ip = body.trim();
+
+    ip.parse::<IpAddr>().ok().map(|addr| addr.to_string())
+}
+
+#[tauri::command]
+async fn get_network_info() -> Result<NetworkInfo, String> {
+    let mut info = run_blocking(get_local_network_info).await?;
+    if let Some(public_ip) = get_public_ip().await {
+        info.public_ip = public_ip;
+    }
+
+    Ok(info)
 }
 
 fn platform_shell_command(command: &str) -> Command {
@@ -3207,6 +3480,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             list_apps,
+            get_network_info,
             docker_status,
             search_docker_hub,
             list_containers,

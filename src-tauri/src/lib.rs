@@ -120,11 +120,9 @@ fn delete_note(state: tauri::State<'_, DbState>, id: i64) -> Result<(), String> 
 #[tauri::command]
 fn search_notes(state: tauri::State<'_, DbState>, query: String) -> Result<Vec<Note>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    // Escape SQL LIKE wildcards (% and _) so they are treated as literals
-    let escaped_query = query.replace("%", "\\%").replace("_", "\\_");
-    let search_pattern = format!("%{}%", escaped_query);
+    let search_pattern = format!("%{}%", escape_like_pattern(&query));
     let mut stmt = conn.prepare(
-        "SELECT id, title, content, created_at, updated_at FROM notes WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY updated_at DESC"
+        "SELECT id, title, content, created_at, updated_at FROM notes WHERE title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let notes = stmt
@@ -142,6 +140,23 @@ fn search_notes(state: tauri::State<'_, DbState>, query: String) -> Result<Vec<N
         .map_err(|e| e.to_string())?;
 
     Ok(notes)
+}
+
+fn escape_like_pattern(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_like_pattern;
+
+    #[test]
+    fn escapes_like_wildcards_and_escape_character() {
+        assert_eq!(escape_like_pattern(r"100%_done\today"), r"100\%\_done\\today");
+    }
 }
 
 #[tauri::command]

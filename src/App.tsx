@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal } from "lucide-react";
 import { cn } from "./utils/cn";
-import { plugins } from "./plugins";
+import { getPluginsForQuery, plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
 import Settings from "./Settings";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -857,8 +857,9 @@ function App() {
       hasPublishedForQuery = true;
     };
 
-    const immediatePlugins = plugins.filter(plugin => plugin.searchDebounceMs === undefined);
-    const debouncedPlugins = plugins.filter(plugin => plugin.searchDebounceMs !== undefined);
+    const queryPlugins = getPluginsForQuery(query);
+    const immediatePlugins = queryPlugins.filter(plugin => plugin.searchDebounceMs === undefined);
+    const debouncedPlugins = queryPlugins.filter(plugin => plugin.searchDebounceMs !== undefined);
 
     const fetchImmediateItems = async () => {
       try {

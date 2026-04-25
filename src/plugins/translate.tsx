@@ -269,6 +269,7 @@ export const translatePlugin: GQuickPlugin = {
     subtitle: "AI-powered text translation",
     icon: Languages,
     keywords: ["translate", "translation", "language", "convert text"],
+    queryPrefixes: ["translate:", /^\/translate(?:$|\s)/i],
   },
   searchDebounceMs: 150,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
@@ -280,7 +281,7 @@ export const translatePlugin: GQuickPlugin = {
     }
 
     // Full translate UI
-    const isTranslateCommand = trimmed.startsWith("/translate") || trimmed.startsWith("translate:");
+    const isTranslateCommand = trimmed.startsWith("translate:") || /^\/translate(?:$|\s)/i.test(trimmed);
     const isTranslateKeyword = trimmed === "translate" || trimmed === "translation";
     const isTranslateQuery = isTranslateCommand || isTranslateKeyword;
 

@@ -1,6 +1,8 @@
 import React from "react";
 import { LucideIcon } from "lucide-react";
 
+export type QueryPrefixMatcher = string | RegExp;
+
 export interface PluginAction {
   id: string;
   label: string;
@@ -14,6 +16,11 @@ export interface PluginMetadata {
   subtitle?: string;
   icon: LucideIcon;
   keywords: string[];
+  /**
+   * Prefixes that explicitly route a launcher query to this plugin only.
+   * String match is case-insensitive startsWith; RegExp match runs against trimmed query.
+   */
+  queryPrefixes?: QueryPrefixMatcher[];
 }
 
 export interface SearchResultItem {

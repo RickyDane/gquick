@@ -29,6 +29,7 @@ export const notesPlugin: GQuickPlugin = {
     title: "Notes",
     icon: StickyNote,
     keywords: ["note", "memo", "remember", "save"],
+    queryPrefixes: ["note:", "notes:", "search notes:"],
   },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmed = query.trim();

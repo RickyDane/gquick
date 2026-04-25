@@ -73,17 +73,31 @@ This error means Tauri could not import the `.p12` into the CI keychain. Common 
 | Wrong password | Verify `APPLE_CERTIFICATE_PASSWORD` matches the password you set when exporting the `.p12` |
 | Secret not set | Check the secret exists and is not empty in **Settings > Secrets and variables > Actions** |
 
+### Verify the password locally
+
+```bash
+# Create a temp keychain and try importing
+security create-keychain -p "temp123" /tmp/test.keychain
+security unlock-keychain -p "temp123" /tmp/test.keychain
+security import certificate.p12 -P "YOUR_PASSWORD_HERE" -k /tmp/test.keychain
+security find-identity -v -p codesigning /tmp/test.keychain
+```
+
+If this fails with the same error, your password is wrong or the `.p12` is missing the private key. Re-export from Keychain Access.
+
 ### Quick validation
 
 Decode the secret locally and inspect it:
 
 ```bash
 echo "$APPLE_CERTIFICATE" | base64 -d -o certificate_check.p12
-# Verify it's a valid PKCS#12
-openssl pkcs12 -in certificate_check.p12 -info -noout
+# Verify it's a valid PKCS#12 (use -legacy on OpenSSL 3.x)
+openssl pkcs12 -in certificate_check.p12 -info -noout -legacy
 ```
 
 You should see `PKCS7 Encrypted data` and a `shrouded keybag`. If the file is corrupt, re-export and re-encode.
+
+> **Note:** On macOS with OpenSSL 3.x, you may see `unsupported: Algorithm (RC2-40-CBC)` without `-legacy`. This is normal — the certificate is still valid, OpenSSL just can't decrypt the legacy encryption. The macOS `security` tool handles this fine.
 
 ## CI Behavior
 

@@ -31,7 +31,7 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
 
 ### Screen Capture & OCR
 - **Screenshot Capture** — `Alt+S` opens a fullscreen transparent selector; drag to capture a region, saved to `~/Desktop/gquick_capture.png`, copied to clipboard as image
-- **OCR Text Extraction** — `Alt+O` opens the same selector; runs real **Tesseract OCR** (Rust `tesseract` crate 0.15), copies extracted text to clipboard, shows preview notification
+- **OCR Text Extraction** — `Alt+O` opens the same selector; extracts text via **Tesseract OCR** on macOS (Rust `tesseract` crate 0.15) or **AI vision models** on Windows/Linux (OpenAI, Gemini, Kimi, Anthropic), copies extracted text to clipboard
 
 ### Utilities
 - **Calculator** — type math expressions directly in the search bar (e.g. `2+2*5`); result copied to clipboard on Enter
@@ -68,7 +68,8 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
 | Tauri | 2.0 | Desktop framework |
 | xcap | 0.9 | Screen capture |
 | image | 0.25 | Image processing / cropping |
-| tesseract | 0.15 | OCR text extraction |
+| tesseract | 0.15 | OCR text extraction (macOS only) |
+| AI Vision APIs | — | OCR via OpenAI/Gemini/Kimi/Anthropic (Windows/Linux) |
 | walkdir | 2 | File system traversal |
 | chrono | 0.4 | Date/time formatting |
 | dirs | 5 | Standard directory paths |
@@ -126,7 +127,7 @@ Plugins are queried in parallel on every keystroke (150ms debounce), results are
 ### Prerequisites
 - Node.js 20+
 - Rust toolchain
-- Tesseract OCR installed (platform-specific)
+- Tesseract OCR installed (macOS only; Windows/Linux use AI vision models)
 
 ### macOS
 ```bash
@@ -140,16 +141,6 @@ npm run tauri dev
 
 ### Windows
 ```bash
-# Install Tesseract via Chocolatey
-choco install tesseract
-
-# Install vcpkg for native deps
-git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-C:\vcpkg\bootstrap-vcpkg.bat
-C:\vcpkg\vcpkg.exe install leptonica:x64-windows tesseract:x64-windows
-set VCPKG_ROOT=C:\vcpkg
-set VCPKGRS_DYNAMIC=1
-
 npm install
 npm run tauri dev
 ```
@@ -160,7 +151,7 @@ sudo apt-get update
 sudo apt-get install -y \
   libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev \
   librsvg2-dev patchelf libpipewire-0.3-dev \
-  libtesseract-dev libleptonica-dev libclang-dev clang
+  libclang-dev clang
 
 npm install
 npm run tauri dev
@@ -180,8 +171,8 @@ Built bundles appear in `src-tauri/target/release/bundle/`.
 2. **No persistent chat history** — conversations are lost when the app is closed
 3. **File index scope** — scans home directory only, max depth 6, skips hidden dirs and common build/cache folders
 4. **SQLite initialized but unused** — `tauri-plugin-sql` is included but no database tables are created or used
-5. **OCR language** — Tesseract uses English only (`eng`); no language selection in UI
-6. **macOS-only tessdata bundling** — on macOS, looks for `tessdata/` in app resource dir; other platforms rely on system Tesseract installation
+5. **OCR language** — Tesseract on macOS uses English only (`eng`); AI vision OCR on Windows/Linux uses the model's multilingual capability with no explicit language control
+6. **macOS-only tessdata bundling** — on macOS, looks for `tessdata/` in app resource dir; Windows/Linux use AI APIs and do not need local tessdata
 7. **No search result caching** — every keystroke re-queries all plugins (though file index is cached 5 minutes)
 8. **Smart search token limits** — file content sent to AI is truncated to 5000 chars to stay within API limits
 

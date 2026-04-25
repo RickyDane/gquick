@@ -188,11 +188,11 @@ Tray icon setup (lines 974–989) is cross-platform Tauri API. ✅
 
 ---
 
-## 7. Dependencies (tesseract, xcap platform support)
+## 7. Dependencies (OCR, xcap platform support)
 
-### Status: ⚠️ PARTIAL
+### Status: ✅ READY (OCR), ⚠️ PARTIAL (xcap on Linux Wayland)
 
-**Severity: High**
+**Severity: Medium**
 
 ### 7.1 `xcap` (screen capture)
 
@@ -202,18 +202,15 @@ Tray icon setup (lines 974–989) is cross-platform Tauri API. ✅
 - **Linux requirement**: On Linux, `xcap` requires `libxcb`, `libxrandr`, and possibly `libdbus` depending on the backend. Wayland support in `xcap` is limited; it may fall back to X11 or fail on pure Wayland sessions. ⚠️
 - **Windows requirement**: Works out of the box on Windows 10/11. ✅
 
-### 7.2 `tesseract` (OCR)
+### 7.2 OCR (Platform-Specific)
 
-`Cargo.toml`: `tesseract = "0.15"`
+**macOS**: Uses `tesseract = "0.15"` (Rust binding to C++ Tesseract). Requires Homebrew install (`brew install tesseract`). The dependency is gated with `[target.'cfg(target_os = "macos")'.dependencies]`. ⚠️
 
-- The `tesseract` crate is a Rust binding to the C++ Tesseract library.
-- **macOS**: Typically installed via Homebrew (`brew install tesseract`). The app assumes it's available. ⚠️
-- **Windows**: Users must install Tesseract and it must be in `PATH`. The `tesseract` crate does not bundle the binary. ❌
-- **Linux**: Usually available via package manager (`apt install tesseract-ocr`), but not bundled. ⚠️
+**Windows/Linux**: Uses AI vision models (OpenAI, Google Gemini, Kimi, Anthropic) via the frontend. No local OCR engine required. The Rust backend captures the screen, encodes the image to base64, and emits it to the frontend which calls the configured AI API. ✅
 
 **Recommended Fix:**
-- **Windows**: Bundle `tesseract.exe` and language data files with the app, or use a pure-Rust OCR alternative like `ocr` (if feasible) or ship a self-contained Tesseract build.
-- **All platforms**: Detect Tesseract availability at runtime and gracefully disable OCR if missing (already partially handled with error message, but the feature should be hidden/disabled in UI if unavailable).
+- **macOS**: Continue bundling Tesseract or document the Homebrew dependency clearly.
+- **All platforms**: Detect AI provider availability at runtime and gracefully disable OCR if no API key is configured (already partially handled with error messages).
 - **Linux Wayland**: Document that screen capture may require XWayland or an X11 session.
 
 ---

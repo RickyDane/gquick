@@ -49,7 +49,8 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 ### Screen Capture & OCR
 - **Screenshot Capture** — Select any screen region with `Alt+S`
 - **OCR (Text Extraction)** — Extract text from any screen region with `Alt+O`
-  - Powered by [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+  - macOS: Powered by [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+  - Windows/Linux: Powered by AI vision models (OpenAI, Gemini, Kimi, Anthropic)
   - Automatically copies extracted text to clipboard
 
 ### AI Chat
@@ -250,16 +251,6 @@ npm run tauri dev
 ### Windows
 
 ```bash
-# Install Tesseract via Chocolatey
-choco install tesseract
-
-# Install vcpkg and native OCR libraries used by the Rust build
-git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-C:\vcpkg\bootstrap-vcpkg.bat
-C:\vcpkg\vcpkg.exe install leptonica:x64-windows tesseract:x64-windows
-set VCPKG_ROOT=C:\vcpkg
-set VCPKGRS_DYNAMIC=1
-
 # Install dependencies
 npm install
 
@@ -279,8 +270,6 @@ sudo apt-get install -y \
   librsvg2-dev \
   patchelf \
   libpipewire-0.3-dev \
-  libtesseract-dev \
-  libleptonica-dev \
   libclang-dev \
   clang
 
@@ -377,7 +366,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Built with [Tauri](https://tauri.app) — Rust-powered desktop framework
 - UI powered by [React](https://react.dev) and [Tailwind CSS](https://tailwindcss.com)
 - Icons by [Lucide](https://lucide.dev)
-- OCR powered by [Tesseract](https://github.com/tesseract-ocr/tesseract)
+- OCR powered by [Tesseract](https://github.com/tesseract-ocr/tesseract) on macOS, AI vision models on Windows/Linux
 - Screen capture by [xcap](https://github.com/nashaofu/xcap)
 
 ---

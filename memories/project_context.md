@@ -40,7 +40,7 @@ graph TB
         V --> W[System Tray]
         R --> X[xcap crate]
         R --> Y[image crate]
-        R --> Z[tesseract crate]
+        R --> Z[tesseract crate<br/>macOS only]
         S --> AA[FileIndex + walkdir]
         CC --> DD[(SQLite<br/>rusqlite)]
     end
@@ -48,7 +48,7 @@ graph TB
     subgraph "System"
         X --> AB[Screen Capture]
         Y --> AC[Image Crop/Save]
-        Z --> AD[OCR Text Extraction]
+        Z --> AD[OCR Text Extraction<br/>macOS: Tesseract | Win/Linux: AI Vision]
         T --> AE[Docker CLI]
         Q --> AF[macOS/Win/Linux Apps]
         W --> AG[Menu Bar Icon]
@@ -77,7 +77,7 @@ graph TB
 |---------|------|----------------|
 | `list_apps` | `src-tauri/src/lib.rs` | Scans system app directories (macOS `.app`, Windows `.lnk`, Linux `.desktop`) |
 | `open_app` | `src-tauri/src/lib.rs` | Launches apps via `open` (macOS), `start` (Windows), `xdg-open` (Linux) |
-| `capture_region` | `src-tauri/src/lib.rs` | Hides window, captures screen via `xcap`, crops region, saves to Desktop, runs OCR or copies to clipboard |
+| `capture_region` | `src-tauri/src/lib.rs` | Hides window, captures screen via `xcap`, crops region, saves to Desktop. Screenshot: copies image. OCR: runs Tesseract (macOS) or emits base64 image (Win/Linux) |
 | `search_files` | `src-tauri/src/lib.rs` | Fast filename-based file search with keyword scoring |
 | `smart_search_files` | `src-tauri/src/lib.rs` | AI-enhanced file search: reads file metadata, content previews, time filters |
 | `open_file` | `src-tauri/src/lib.rs` | Opens files via `tauri-plugin-opener` |
@@ -158,7 +158,9 @@ Rust: hides selector → 150ms delay → xcap captures screen
 Crops region, saves to ~/Desktop/gquick_capture.png
     ↓
 If screenshot mode: copies image to clipboard
-If OCR mode: runs Tesseract OCR → copies text to clipboard + emits ocr-complete event
+If OCR mode:
+  macOS: runs Tesseract OCR → copies text to clipboard + emits ocr-complete event
+  Windows/Linux: reads image as base64 → emits ocr-image-ready → frontend calls AI vision API → copies text to clipboard
 ```
 
 ### AI Chat Flow (Real — Not Mocked)
@@ -247,7 +249,7 @@ AI responds with note-aware answer
 - **Framework**: Tauri 2.0 (Rust)
 - **Screen Capture**: xcap 0.9
 - **Image Processing**: image 0.25
-- **OCR**: tesseract 0.15
+        - **OCR**: tesseract 0.15 (macOS only); AI Vision Models — OpenAI, Kimi, Google Gemini, Anthropic (Windows/Linux via frontend)
 - **File Walking**: walkdir 2
 - **Fuzzy Matching**: fuzzy-matcher 0.3
 - **Date/Time**: chrono 0.4

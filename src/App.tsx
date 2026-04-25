@@ -7,11 +7,13 @@ import Settings from "./Settings";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
+import { performAiOcr } from "./utils/aiOcr";
 import { streamOpenAI, streamGemini, streamAnthropic } from "./utils/streaming";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -242,6 +244,30 @@ function App() {
 
     return () => {
       unlisten?.();
+    };
+  }, []);
+
+  // Listen for AI OCR image ready (Windows/Linux)
+  useEffect(() => {
+    const promise = listen<string>("ocr-image-ready", async (event) => {
+      try {
+        const ocrText = await performAiOcr(event.payload);
+        if (!ocrText || ocrText.startsWith("Error:")) {
+          console.error("AI OCR failed:", ocrText || "Empty response");
+          return;
+        }
+        await writeText(ocrText);
+        console.log("AI OCR text copied to clipboard");
+        // Emit ocr-complete for consistency with macOS
+        const preview = ocrText.length > 100 ? `${ocrText.slice(0, 100)}...` : ocrText;
+        console.log("AI OCR result:", preview);
+      } catch (err) {
+        console.error("AI OCR error:", err);
+      }
+    });
+
+    return () => {
+      promise.then((unlisten) => unlisten()).catch(console.error);
     };
   }, []);
 

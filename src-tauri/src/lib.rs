@@ -9,6 +9,7 @@ use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState as GsShortcutState,
 };
 use tauri_plugin_opener::OpenerExt;
+#[cfg(target_os = "macos")]
 use tesseract::Tesseract;
 
 #[tauri::command]
@@ -668,6 +669,7 @@ fn parse_time_filter(query: &str) -> Option<u64> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
     app.path()
         .resource_dir()
@@ -677,6 +679,7 @@ fn tesseract_data_path(app: &tauri::AppHandle) -> Option<String> {
         .map(|dir| dir.to_string_lossy().to_string())
 }
 
+#[cfg(target_os = "macos")]
 fn run_ocr(app: &tauri::AppHandle, path: &str) -> String {
     let data_path = tesseract_data_path(app);
 
@@ -2197,19 +2200,42 @@ fn capture_region(
             let tauri_image = tauri::image::Image::new_owned(rgba_bytes, width, height);
             let _ = app.clipboard().write_image(&tauri_image);
         } else if mode == "ocr" {
-            let ocr_text = run_ocr(&app, &path);
+            #[cfg(target_os = "macos")]
+            {
+                let ocr_text = run_ocr(&app, &path);
 
-            // Copy extracted text to clipboard
-            let _ = app.clipboard().write_text(ocr_text.clone());
+                // Copy extracted text to clipboard
+                let _ = app.clipboard().write_text(ocr_text.clone());
 
-            // Show notification with first 100 chars
-            let preview = if ocr_text.len() > 100 {
-                format!("{}...", &ocr_text[..100])
-            } else {
-                ocr_text.clone()
-            };
+                // Show notification with first 100 chars
+                let preview = if ocr_text.len() > 100 {
+                    format!("{}...", &ocr_text[..100])
+                } else {
+                    ocr_text.clone()
+                };
 
-            let _ = app.emit("ocr-complete", preview);
+                if let Err(e) = app.emit("ocr-complete", preview) {
+                    eprintln!("Failed to emit ocr-complete: {}", e);
+                }
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        let image_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        if let Err(e) = app.emit("ocr-image-ready", image_base64) {
+                            eprintln!("Failed to emit ocr-image-ready: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read captured image for OCR: {}", e);
+                        if let Err(emit_err) = app.emit("ocr-error", format!("Failed to read image: {}", e)) {
+                            eprintln!("Failed to emit ocr-error: {}", emit_err);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(path)

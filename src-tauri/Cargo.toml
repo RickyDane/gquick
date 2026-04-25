@@ -16,7 +16,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "protocol-asset"] }
@@ -29,7 +28,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 xcap = "0.9"
 image = "0.25"
-tesseract = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
@@ -40,3 +38,6 @@ base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rayon = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tesseract = "0.15"

@@ -14,7 +14,8 @@ env:
 
 jobs:
   build:
-    environment: Configure Tauri v2.0
+    environment:
+      name: Configure Tauri v2.0
     permissions:
       contents: write
     strategy:
@@ -107,6 +108,27 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Debug signing secret access
+        if: matrix.os_name == 'macos-arm'
+        env:
+          HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Environment: Configure Tauri v2.0"
+          echo "APPLE_CERTIFICATE present: $HAS_APPLE_CERTIFICATE"
+          echo "APPLE_CERTIFICATE_PASSWORD present: $HAS_APPLE_CERTIFICATE_PASSWORD"
+          echo "APPLE_SIGNING_IDENTITY present: $HAS_APPLE_SIGNING_IDENTITY"
+          echo "APPLE_ID present: $HAS_APPLE_ID"
+          echo "APPLE_PASSWORD present: $HAS_APPLE_PASSWORD"
+          echo "APPLE_TEAM_ID present: $HAS_APPLE_TEAM_ID"
 
       - name: Validate macOS signing certificate
         if: matrix.os_name == 'macos-arm'

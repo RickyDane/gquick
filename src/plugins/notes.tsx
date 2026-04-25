@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StickyNote, Search } from "lucide-react";
-import { GQuickPlugin, SearchResultItem } from "./types";
+import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 
 interface Note {
   id: number;
@@ -30,6 +30,50 @@ export const notesPlugin: GQuickPlugin = {
     icon: StickyNote,
     keywords: ["note", "memo", "remember", "save"],
     queryPrefixes: ["note:", "notes:", "search notes:"],
+  },
+  tools: [
+    {
+      name: "search_notes",
+      description: "Search saved notes by title or content.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query for note title or content" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "create_note",
+      description: "Save a new note to the user's notes database.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Note title" },
+          content: { type: "string", description: "Note body content" },
+        },
+        required: ["title", "content"],
+      },
+    },
+  ],
+  executeTool: async (name: string, args: Record<string, any>): Promise<ToolResult> => {
+    if (name === "search_notes") {
+      try {
+        const notes = await invoke<Note[]>("search_notes", { query: args.query });
+        return { content: JSON.stringify(notes), success: true };
+      } catch (err: any) {
+        return { content: "", success: false, error: err.message || String(err) };
+      }
+    }
+    if (name === "create_note") {
+      try {
+        await invoke("create_note", { title: args.title, content: args.content });
+        return { content: `Note "${args.title}" created successfully.`, success: true };
+      } catch (err: any) {
+        return { content: "", success: false, error: err.message || String(err) };
+      }
+    }
+    return { content: "", success: false, error: `Unknown tool: ${name}` };
   },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmed = query.trim();

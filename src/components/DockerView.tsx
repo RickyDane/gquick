@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileCode2, Loader2, Play, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
+import { FileCode2, Loader2, Play, Terminal, Trash2, X } from "lucide-react";
 import { searchDockerHub, DockerHubResult } from "../utils/dockerHub";
 import { cn } from "../utils/cn";
 
@@ -65,8 +65,9 @@ export interface DockerInitialImage {
 }
 
 interface DockerViewProps {
-  onClose?: () => void;
   initialImage?: DockerInitialImage | null;
+  searchQuery: string;
+  onSearchQueryChange?: (q: string) => void;
 }
 
 type SelectedItem = { type: "container" | "image"; id: string; label: string };
@@ -138,13 +139,12 @@ function menuPosition(x: number, y: number) {
   };
 }
 
-export function DockerView({ onClose, initialImage }: DockerViewProps) {
+export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: DockerViewProps) {
   const [tab, setTab] = useState<Tab>("containers");
   const [status, setStatus] = useState<DockerStatus | null>(null);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [images, setImages] = useState<ImageInfo[]>([]);
   const [hub, setHub] = useState<DockerHubResult[]>([]);
-  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<SelectedItem | null>(null);
@@ -159,7 +159,6 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
   const hubSearchSeq = useRef(0);
   const refreshSeq = useRef(0);
   const mountedRef = useRef(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     const seq = ++refreshSeq.current;
@@ -199,6 +198,12 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
   }, [refresh]);
 
   useEffect(() => {
+    const handleRefresh = () => void refresh();
+    window.addEventListener("gquick-docker-refresh", handleRefresh);
+    return () => window.removeEventListener("gquick-docker-refresh", handleRefresh);
+  }, [refresh]);
+
+  useEffect(() => {
     if (!contextMenu) return;
     const close = () => setContextMenu(null);
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -225,7 +230,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
   }, []);
 
   useEffect(() => {
-    if (tab !== "hub" || query.trim().length < 2) {
+    if (tab !== "hub" || searchQuery.trim().length < 2) {
       setHub([]);
       return;
     }
@@ -233,7 +238,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
     const seq = ++hubSearchSeq.current;
     const timer = window.setTimeout(async () => {
       try {
-        const results = await searchDockerHub(query, controller.signal);
+        const results = await searchDockerHub(searchQuery, controller.signal);
         if (seq === hubSearchSeq.current) setHub(results);
       } catch (error) {
         if (controller.signal.aborted || seq !== hubSearchSeq.current) return;
@@ -244,7 +249,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [query, tab]);
+  }, [searchQuery, tab]);
 
   useEffect(() => {
     if (!initialImage) {
@@ -257,7 +262,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
 
     setSelectedImageContext(initialImage);
     setTab("images");
-    setQuery("");
+    onSearchQueryChange?.("");
     setRunForm((prev) => ({ ...prev, image: imageRef }));
     setOutput(`${initialImage.source === "hub" ? "Docker Hub" : "Local"} image selected: ${imageRef}`);
   }, [initialImage?.selectedAt]);
@@ -277,12 +282,12 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
     });
     setRunForm((prev) => ({ ...prev, image }));
     setTab("images");
-    setQuery("");
+    onSearchQueryChange?.("");
     setOutput(`Docker Hub image selected: ${image}`);
   }, []);
 
-  const filteredContainers = useMemo(() => containers.filter((c) => [c.names, c.image, c.status, c.ports].join(" ").toLowerCase().includes(query.toLowerCase())), [containers, query]);
-  const filteredImages = useMemo(() => images.filter((i) => `${i.repository}:${i.tag} ${i.id}`.toLowerCase().includes(query.toLowerCase())), [images, query]);
+  const filteredContainers = useMemo(() => containers.filter((c) => [c.names, c.image, c.status, c.ports].join(" ").toLowerCase().includes(searchQuery.toLowerCase())), [containers, searchQuery]);
+  const filteredImages = useMemo(() => images.filter((i) => `${i.repository}:${i.tag} ${i.id}`.toLowerCase().includes(searchQuery.toLowerCase())), [images, searchQuery]);
 
   async function runAction(action: () => Promise<CommandResult | void>, label: string) {
     setBusy(true);
@@ -389,18 +394,6 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col overflow-hidden text-zinc-200">
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/5 px-3 py-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-          <span className={cn("max-w-[150px] shrink-0 truncate rounded-full border px-2 py-0.5 text-[11px]", statusClass)}>● {loading ? "Loading" : statusLabel}</span>
-          {status?.docker_version && <span className="hidden min-w-0 truncate text-[11px] text-zinc-500 min-[620px]:block" title={status.docker_version}>{status.docker_version}</span>}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <span className="hidden text-[11px] text-zinc-500 min-[700px]:inline">⌘/Ctrl ⇧D</span>
-          <button onClick={() => void refresh()} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10 cursor-pointer"><RefreshCw className="h-3 w-3" /> <span className="hidden min-[520px]:inline">Refresh</span></button>
-          {onClose && <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/5 cursor-pointer"><X className="h-4 w-4" /></button>}
-        </div>
-      </div>
-
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="w-24 shrink-0 border-r border-white/5 p-2 min-[620px]:w-32">
           {(["containers", "images", "hub", "compose", "activity"] as Tab[]).map((item) => (
@@ -410,9 +403,9 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden p-3 pb-12" onContextMenu={openBackgroundMenu}>
-          <div className="relative mb-3 shrink-0">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
-            <input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Docker Hub, images, containers..." className="w-full rounded-xl border border-white/10 bg-zinc-950/60 py-2 pl-9 pr-3 text-sm outline-none focus:border-cyan-500/40" />
+          <div className="flex min-w-0 items-center gap-2 mb-3">
+            <span className={cn("max-w-[150px] shrink-0 truncate rounded-full border px-2 py-0.5 text-[11px]", statusClass)}>● {loading ? "Loading" : statusLabel}</span>
+            {status?.docker_version && <span className="hidden min-w-0 truncate text-[11px] text-zinc-500 min-[620px]:block" title={status.docker_version}>{status.docker_version}</span>}
           </div>
 
           {loading ? <div className="p-6 text-center text-sm text-zinc-400"><Loader2 className="inline h-4 w-4 animate-spin" /> Loading Docker...</div> : !status?.cli_installed || !status?.daemon_running ? (
@@ -422,7 +415,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
           ) : tab === "images" ? (
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
               {selectedImageContext && <SelectedImageCard image={selectedImageContext} onClear={() => setSelectedImageContext(null)} />}
-              <RunPanel runForm={runForm} setRunForm={setRunForm} onRun={() => {
+              <RunPanel runForm={runForm} setRunForm={setRunForm} busy={busy} onRun={() => {
                 const opts = buildRunOptions();
                 const risky = opts.ports.length > 0 || opts.volumes.length > 0 || opts.extra_args.includes("--network") || opts.extra_args.includes("--privileged");
                 if (risky && !confirmRisk("Run container with exposed ports, bind mounts, or advanced flags?")) return;
@@ -440,7 +433,7 @@ export function DockerView({ onClose, initialImage }: DockerViewProps) {
         </div>
 
         <DetailDrawer selected={selected} width={detailPanelWidth} busy={busy} output={output} onClose={() => setSelected(null)} onResizeStart={startDetailPanelResize} onResize={(width) => resizeDetailPanel(width)} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onDelete={deleteSelected} />
-        <DockerContextMenu menu={contextMenu} busy={busy} dockerAvailable={Boolean(status?.cli_installed && status.daemon_running)} onClose={() => setContextMenu(null)} onContainerAction={runContainerAction} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onRemove={(container) => deleteSelected(container.id, "container")} onRefresh={() => void refresh()} onSearch={() => searchInputRef.current?.focus()} onPrune={pruneSystem} />
+        <DockerContextMenu menu={contextMenu} busy={busy} dockerAvailable={Boolean(status?.cli_installed && status.daemon_running)} onClose={() => setContextMenu(null)} onContainerAction={runContainerAction} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onRemove={(container) => deleteSelected(container.id, "container")} onRefresh={() => void refresh()} onSearch={() => window.dispatchEvent(new CustomEvent("gquick-focus-docker-search"))} onPrune={pruneSystem} />
       </div>
     </div>
   );
@@ -503,7 +496,7 @@ function HubRows({ repos, onSelect, onPull }: { repos: DockerHubResult[]; onSele
   })}</div>;
 }
 
-function RunPanel({ runForm, setRunForm, onRun }: { runForm: RunForm; setRunForm: Dispatch<SetStateAction<RunForm>>; onRun: () => void }) {
+function RunPanel({ runForm, setRunForm, onRun, busy }: { runForm: RunForm; setRunForm: Dispatch<SetStateAction<RunForm>>; onRun: () => void; busy?: boolean }) {
   const fieldClass = "h-9 w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-2.5 text-xs outline-none placeholder:text-zinc-600 focus:border-cyan-500/40";
   const textAreaClass = "min-h-16 w-full min-w-0 resize-y rounded-lg border border-white/10 bg-zinc-950 px-2.5 py-2 text-xs leading-relaxed outline-none placeholder:text-zinc-600 focus:border-cyan-500/40";
   const labelClass = "block min-w-0 space-y-1";
@@ -524,7 +517,7 @@ function RunPanel({ runForm, setRunForm, onRun }: { runForm: RunForm; setRunForm
         <label className="inline-flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" checked={runForm.detached} onChange={(e) => setRunForm((p) => ({ ...p, detached: e.target.checked }))} /> Detached</label>
         <label className="inline-flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" checked={runForm.interactive} onChange={(e) => setRunForm((p) => ({ ...p, interactive: e.target.checked }))} /> Interactive</label>
       </div>
-      <button onClick={onRun} disabled={!runForm.image.trim()} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs text-white disabled:opacity-40 cursor-pointer">Run</button>
+      <button onClick={onRun} disabled={!runForm.image.trim() || busy} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs text-white disabled:opacity-40 cursor-pointer">{busy ? <Loader2 className="h-3 w-3 animate-spin" /> : "Run"}</button>
     </div>
   </div>;
 }

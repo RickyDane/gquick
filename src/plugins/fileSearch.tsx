@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { File, Folder, SearchX } from "lucide-react";
-import { GQuickPlugin, SearchResultItem } from "./types";
+import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 
 interface FileInfo {
   name: string;
@@ -160,6 +160,36 @@ export const fileSearchPlugin: GQuickPlugin = {
     keywords: ["file", "folder", "open", "find"],
   },
   searchDebounceMs: 150,
+  tools: [
+    {
+      name: "search_files",
+      description: "Search the local filesystem for files and folders by name. Returns matching file paths with metadata.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query for filenames or keywords",
+          },
+          max_results: {
+            type: "integer",
+            description: "Maximum number of results to return",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  ],
+  executeTool: async (_name: string, args: Record<string, any>): Promise<ToolResult> => {
+    try {
+      const files = await invoke<FileInfo[]>("search_files", { query: args.query });
+      const maxResults = typeof args.max_results === "number" ? args.max_results : files.length;
+      const sliced = files.slice(0, maxResults);
+      return { content: JSON.stringify(sliced), success: true };
+    } catch (err: any) {
+      return { content: "", success: false, error: err.message || String(err) };
+    }
+  },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     if (!query || query.length < 2) {
       return [];

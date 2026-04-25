@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Network } from "lucide-react";
-import { GQuickPlugin, SearchResultItem } from "./types";
+import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 
 interface NetworkInfo {
   localIp: string;
@@ -86,6 +86,31 @@ export const networkInfoPlugin: GQuickPlugin = {
     queryPrefixes: [/^(net|network)(:|\b)/i, /^(wifi|wi-fi|vpn)$/i],
   },
   searchDebounceMs: 150,
+  tools: [
+    {
+      name: "get_network_info",
+      description: "Get local network information including IP addresses, Wi-Fi SSID, VPN status, and latency.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  ],
+  executeTool: async (_name: string, _args: Record<string, any>): Promise<ToolResult> => {
+    try {
+      const info = await getCachedNetworkInfo();
+      return {
+        content: JSON.stringify(info),
+        success: true,
+      };
+    } catch (err: any) {
+      return {
+        content: JSON.stringify(unavailableInfo()),
+        success: false,
+        error: err.message || String(err),
+      };
+    }
+  },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     if (!isNetworkQuery(query)) return [];
 

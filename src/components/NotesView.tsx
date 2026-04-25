@@ -2,14 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   StickyNote,
-  Plus,
   Trash2,
   Edit2,
   Copy,
   Save,
   X,
   Clock,
-  Search,
   Check,
 } from "lucide-react";
 import { cn } from "../utils/cn";
@@ -24,8 +22,8 @@ export interface Note {
 }
 
 interface NotesViewProps {
-  onClose?: () => void;
   initialNoteId?: number;
+  searchQuery?: string;
 }
 
 function formatDate(iso?: string): string {
@@ -43,14 +41,13 @@ function formatDate(iso?: string): string {
   }
 }
 
-export function NotesView({ onClose, initialNoteId }: NotesViewProps) {
+export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const hasHandledInitialNote = useRef(false);
 
@@ -97,6 +94,15 @@ export function NotesView({ onClose, initialNoteId }: NotesViewProps) {
     window.addEventListener("gquick-note-saved", handleNoteSaved);
     return () => window.removeEventListener("gquick-note-saved", handleNoteSaved);
   }, [fetchNotes]);
+
+  // Listen for create note request from header
+  useEffect(() => {
+    const handleCreateNote = () => {
+      startCreate();
+    };
+    window.addEventListener("gquick-notes-create", handleCreateNote);
+    return () => window.removeEventListener("gquick-notes-create", handleCreateNote);
+  }, []);
 
   const handleSave = async () => {
     if (!editTitle.trim() && !editContent.trim()) return;
@@ -167,39 +173,7 @@ export function NotesView({ onClose, initialNoteId }: NotesViewProps) {
   const isEditing = isCreating || editingNote !== null;
 
   return (
-    <div className={cn("flex flex-col min-w-[500px]", isEditing ? "h-[420px]" : "h-[300px]")}>
-      <div className="flex items-center justify-end px-4 py-3 border-b border-white/5 gap-2">
-          {!isEditing && (
-            <>
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search notes..."
-                  className="bg-zinc-800 border border-white/10 rounded-lg pl-7 pr-3 py-1 text-xs text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all w-40"
-                />
-              </div>
-              <button
-                onClick={startCreate}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
-              >
-                <Plus className="h-3 w-3" />
-                New
-              </button>
-            </>
-          )}
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="p-1.5 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-      </div>
-
+    <div className={cn("flex flex-col min-w-[500px]", isEditing ? "h-auto" : "h-[300px]")}>
       <div className="flex-1 overflow-y-auto">
         {isEditing ? (
           <div className="p-4 space-y-3">

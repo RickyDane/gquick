@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal } from "lucide-react";
+import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, ChevronDown, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal, Plus, RefreshCw } from "lucide-react";
 import { cn } from "./utils/cn";
 import { getPluginsForQuery, plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
@@ -14,7 +14,9 @@ import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
 import { performAiOcr } from "./utils/aiOcr";
-import { streamOpenAI, streamGemini, streamAnthropic } from "./utils/streaming";
+import { streamOpenAITools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
+import { getAllTools, executeTool, convertToolsForProvider, convertMessagesToOpenAI, convertMessagesToGemini, convertMessagesToAnthropic } from "./utils/toolManager";
+import { ToolCall } from "./plugins/types";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
@@ -74,9 +76,11 @@ interface ChatImage {
 
 interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string;
   images?: ChatImage[];
+  toolCalls?: ToolCall[]; // for assistant messages that initiated tool calls
+  toolCallId?: string; // for tool result messages
 }
 
 interface InlineTerminalResult {
@@ -204,6 +208,9 @@ function App() {
   ]);
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -213,6 +220,8 @@ function App() {
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
   const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
   const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
+  const [notesSearchQuery, setNotesSearchQuery] = useState("");
+  const [dockerSearchQuery, setDockerSearchQuery] = useState("");
   const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
 
@@ -265,7 +274,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== "settings" && view !== "actions" && view !== "notes" && view !== "docker") {
+    if (view !== "settings" && view !== "actions") {
       inputRef.current?.focus();
     }
   }, [view]);
@@ -297,8 +306,24 @@ function App() {
   }, [activeActionIndex, view]);
 
   useEffect(() => {
+    if (isAtBottom) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isAtBottom]);
+
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    setIsAtBottom(atBottom);
+    setShowScrollButton(!atBottom);
+  }, []);
+
+  const scrollToBottom = () => {
+    setIsAtBottom(true);
+    setShowScrollButton(false);
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  };
 
   // Listen for notes plugin requesting to open notes view
   useEffect(() => {
@@ -328,6 +353,14 @@ function App() {
     };
     window.addEventListener("gquick-open-docker", handleOpenDocker);
     return () => window.removeEventListener("gquick-open-docker", handleOpenDocker);
+  }, []);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      inputRef.current?.focus();
+    };
+    window.addEventListener("gquick-focus-docker-search", handleFocus);
+    return () => window.removeEventListener("gquick-focus-docker-search", handleFocus);
   }, []);
 
   useEffect(() => {
@@ -374,6 +407,8 @@ function App() {
         setAttachedImages([]);
         setNotesContext(null);
         setInitialNoteId(null);
+        setNotesSearchQuery("");
+        setDockerSearchQuery("");
       });
     };
 
@@ -674,6 +709,7 @@ function App() {
         setQuery("");
         setChatInput("");
         setNotesContext(null);
+        setDockerSearchQuery("");
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === "n" && view !== "actions") {
@@ -1015,7 +1051,6 @@ function App() {
     if ((!chatInput.trim() && attachedImages.length === 0) || isLoading) return;
 
     const trimmedInput = chatInput.trim();
-    // Only fetch notes context when the user is asking about notes
     const noteRelated = isNoteRelatedQuery(trimmedInput);
     const notesContextStr = noteRelated ? await fetchNotesContext(trimmedInput) : null;
 
@@ -1026,13 +1061,8 @@ function App() {
       images: attachedImages.length > 0 ? attachedImages : undefined
     };
 
-    const assistantId = (Date.now() + 1).toString();
-
-    setMessages(prev => [...prev, userMsg, {
-      id: assistantId,
-      role: "assistant",
-      content: ""
-    }]);
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
     setChatInput("");
     setAttachedImages([]);
     setNotesContext(notesContextStr ? notesContextStr.split("\n").filter(line => line.startsWith("  [")).map(line => {
@@ -1041,180 +1071,171 @@ function App() {
     }) : null);
     setIsLoading(true);
 
-    const apiKey = localStorage.getItem("api-key");
+    const apiKey = localStorage.getItem("api-key") ?? "";
     const provider = localStorage.getItem("api-provider") || "openai";
-    const model = localStorage.getItem("selected-model");
+    const model = localStorage.getItem("selected-model") ?? "";
 
     if (!apiKey || !model) {
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId
-          ? { ...m, content: `Please configure your API key and select a model in Settings (${modKey},) first.` }
-          : m
-      ));
+      const assistantId = (Date.now() + 1).toString();
+      setMessages(prev => [...prev, {
+        id: assistantId,
+        role: "assistant",
+        content: `Please configure your API key and select a model in Settings (${modKey},) first.`
+      }]);
       setIsLoading(false);
       return;
     }
 
-    const updateAssistantContent = (text: string) => {
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: text } : m
-      ));
-    };
+    const tools = getAllTools();
+    const providerTools = tools.length > 0 ? convertToolsForProvider(tools, provider as "openai" | "google" | "anthropic") : undefined;
 
-    try {
-      const history = messages.filter(m => m.role !== "assistant" || m.id !== "1");
-      const systemContent = notesContextStr
-        ? `You are GQuick, a helpful AI assistant. The user has shared their saved notes below. Use the notes to answer their question if relevant, but you can also draw on your general knowledge. If the notes contain the answer, reference them. If not, answer from your knowledge. Always format responses using Markdown.`
-        : "You are GQuick, a helpful AI assistant. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate.";
+    const baseSystemContent = "You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, and network queries. Use them when helpful. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate.";
+    const systemContent = notesContextStr
+      ? `You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, and network queries. Use them when helpful.\n\nThe user has shared their saved notes below. Use the notes to answer their question if relevant, but you can also draw on your general knowledge. If the notes contain the answer, reference them. If not, answer from your knowledge. Always format responses using Markdown.`
+      : baseSystemContent;
 
-      const userContentText = notesContextStr || trimmedInput;
+    async function streamWithTools(msgs: Message[], notesContext: string | null, depth = 0) {
+      if (depth > 5) {
+        const assistantId = (Date.now() + Math.random()).toString();
+        setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "Too many tool call rounds. Stopping to prevent infinite loop." }]);
+        setIsLoading(false);
+        return;
+      }
 
+      const assistantId = (Date.now() + Math.random()).toString();
+      setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "" }]);
+
+      const updateAssistantContent = (text: string) => {
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: text } : m));
+      };
+
+      const history = msgs.filter(m => m.role !== "assistant" || m.id !== "1");
+      const lastUserIndex = history.map(m => m.role).lastIndexOf("user");
+      const processedHistory = history.map((m, idx) =>
+        idx === lastUserIndex && notesContext
+          ? { ...m, content: notesContext }
+          : m
+      );
+
+      let apiMessages: any[] = [];
       if (provider === "openai" || provider === "kimi") {
-        const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
-        await streamOpenAI(
-          `${baseUrl}/v1/chat/completions`,
-          {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
-          },
-          {
-            model: model,
-            messages: [
-              { role: "system", content: systemContent },
-              ...history.map(m => ({
-                role: m.role,
-                content: m.images?.length
-                  ? [
-                      { type: "text", text: m.content },
-                      ...m.images.map(img => ({
-                        type: "image_url",
-                        image_url: { url: img.dataUrl }
-                      }))
-                    ]
-                  : m.content
-              })),
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: userContentText },
-                  ...attachedImages.map(img => ({
-                    type: "image_url",
-                    image_url: { url: img.dataUrl }
-                  }))
-                ]
-              }
-            ]
-          },
-          {
-            onContent: updateAssistantContent,
-            onDone: () => setIsLoading(false),
-            onError: (error) => {
-              updateAssistantContent(`Error: ${error}. Please check your API key and model settings.`);
-              setIsLoading(false);
-            }
-          }
-        );
+        apiMessages = [
+          { role: "system", content: systemContent },
+          ...convertMessagesToOpenAI(processedHistory)
+        ];
       } else if (provider === "google") {
-        await streamGemini(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          { "Content-Type": "application/json" },
-          {
-            systemInstruction: { role: "user", parts: [{ text: systemContent }] },
-            contents: [
-              ...history.map(m => ({
-                role: m.role === "assistant" ? "model" : "user",
-                parts: [
-                  { text: m.content },
-                  ...(m.images?.map(img => ({
-                      inlineData: {
-                        mimeType: img.mimeType,
-                        data: img.base64
-                      }
-                    })) || [])
-                ]
-              })),
-              {
-                role: "user",
-                parts: [
-                  { text: userContentText },
-                  ...attachedImages.map(img => ({
-                    inlineData: {
-                      mimeType: img.mimeType,
-                      data: img.base64
-                    }
-                  }))
-                ]
-              }
-            ]
-          },
-          {
-            onContent: updateAssistantContent,
-            onDone: () => setIsLoading(false),
-            onError: (error) => {
-              updateAssistantContent(`Error: ${error}. Please check your API key and model settings.`);
+        apiMessages = convertMessagesToGemini(processedHistory);
+      } else if (provider === "anthropic") {
+        apiMessages = convertMessagesToAnthropic(processedHistory);
+      }
+
+      const callbacks = {
+        onContent: updateAssistantContent,
+        onDone: async (toolCalls?: ToolCall[]) => {
+          try {
+            if (toolCalls && toolCalls.length > 0) {
+              setMessages(prev => prev.map(m =>
+                m.id === assistantId ? { ...m, toolCalls, content: "Using tools..." } : m
+              ));
+
+              const results = await Promise.all(toolCalls.map(async tc => {
+                const result = await executeTool(tc.name, tc.arguments);
+                return { ...tc, result };
+              }));
+
+              const toolResultMessages: Message[] = results.map(r => ({
+                id: `tool-${Date.now()}-${Math.random()}`,
+                role: "tool",
+                content: r.result.content,
+                toolCallId: r.id,
+              }));
+
+              const afterToolMessages = [...msgs,
+                { id: assistantId, role: "assistant", content: "Using tools...", toolCalls: toolCalls } as Message,
+                ...toolResultMessages
+              ];
+              setMessages(afterToolMessages);
+
+              await streamWithTools(afterToolMessages, null, depth + 1);
+            } else {
               setIsLoading(false);
             }
+          } catch (err: any) {
+            updateAssistantContent(`Error: ${err.message || "Tool execution failed"}. Please try again.`);
+            setIsLoading(false);
           }
-        );
-      } else if (provider === "anthropic") {
-        await streamAnthropic(
-          "https://api.anthropic.com/v1/messages",
-          {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01"
-          },
-          {
+        },
+        onError: (error: string) => {
+          updateAssistantContent(`Error: ${error}. Please check your API key and model settings.`);
+          setIsLoading(false);
+        }
+      };
+
+      try {
+        if (provider === "openai" || provider === "kimi") {
+          const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
+          const body: any = {
+            model: model,
+            messages: apiMessages,
+            stream: true,
+          };
+          if (providerTools) {
+            body.tools = providerTools;
+            body.tool_choice = "auto";
+          }
+          await streamOpenAITools(
+            `${baseUrl}/v1/chat/completions`,
+            {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`
+            },
+            body,
+            callbacks
+          );
+        } else if (provider === "google") {
+          const body: any = {
+            systemInstruction: { role: "user", parts: [{ text: systemContent }] },
+            contents: apiMessages,
+          };
+          if (providerTools) {
+            body.tools = [providerTools];
+            body.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+          }
+          await streamGeminiTools(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            { "Content-Type": "application/json" },
+            body,
+            callbacks
+          );
+        } else if (provider === "anthropic") {
+          const body: any = {
             model: model,
             max_tokens: 4096,
             system: systemContent,
-            messages: [
-              ...history.map(m => ({
-                role: m.role,
-                content: m.images?.length
-                  ? [
-                      { type: "text", text: m.content },
-                      ...m.images.map(img => ({
-                        type: "image",
-                        source: {
-                          type: "base64",
-                          media_type: img.mimeType,
-                          data: img.base64
-                        }
-                      }))
-                    ]
-                  : m.content
-              })),
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: userContentText },
-                  ...attachedImages.map(img => ({
-                    type: "image",
-                    source: {
-                      type: "base64",
-                      media_type: img.mimeType,
-                      data: img.base64
-                    }
-                  }))
-                ]
-              }
-            ]
-          },
-          {
-            onContent: updateAssistantContent,
-            onDone: () => setIsLoading(false),
-            onError: (error) => {
-              updateAssistantContent(`Error: ${error}. Please check your API key and model settings.`);
-              setIsLoading(false);
-            }
+            messages: apiMessages,
+            stream: true,
+          };
+          if (providerTools) {
+            body.tools = providerTools;
           }
-        );
+          await streamAnthropicTools(
+            "https://api.anthropic.com/v1/messages",
+            {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01"
+            },
+            body,
+            callbacks
+          );
+        }
+      } catch (err: any) {
+        updateAssistantContent(`Error: ${err.message || "Failed to get response"}. Please check your API key and model settings.`);
+        setIsLoading(false);
       }
-    } catch (err: any) {
-      updateAssistantContent(`Error: ${err.message || "Failed to get response"}. Please check your API key and model settings.`);
-      setIsLoading(false);
     }
+
+    await streamWithTools(nextMessages, notesContextStr);
   }, [chatInput, isLoading, messages, attachedImages, isNoteRelatedQuery, fetchNotesContext]);
 
   return (
@@ -1265,9 +1286,11 @@ function App() {
         <input
           ref={inputRef}
           type="text"
-          value={view === "chat" ? chatInput : query}
+          value={view === "chat" ? chatInput : view === "notes" ? notesSearchQuery : view === "docker" ? dockerSearchQuery : query}
           onChange={(e) => {
             if (view === "chat") setChatInput(e.target.value);
+            else if (view === "notes") setNotesSearchQuery(e.target.value);
+            else if (view === "docker") setDockerSearchQuery(e.target.value);
             else {
               setQuery(e.target.value);
               setActiveIndex(0);
@@ -1277,9 +1300,9 @@ function App() {
             if (view === "chat" && e.key === "Enter") handleSendMessage();
             else handleKeyDown(e);
           }}
-          disabled={view === "settings" || view === "notes" || view === "docker"}
+          disabled={view === "settings"}
           readOnly={view === "actions"}
-          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Notes" : view === "docker" ? "Docker" : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
+          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Search notes..." : view === "docker" ? "Search Docker Hub, images, containers..." : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
           className="min-w-0 flex-1 bg-transparent text-lg text-zinc-100 placeholder-zinc-500 outline-none disabled:opacity-50 read-only:opacity-50"
           spellCheck={false}
         />
@@ -1315,6 +1338,40 @@ function App() {
               <Send className="h-4 w-4" />
             </button>
           </>
+        ) : view === "notes" ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("gquick-notes-create"))}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
+            >
+              <Plus className="h-3 w-3" />
+              New
+            </button>
+            <div
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium border transition-colors cursor-pointer bg-zinc-800 border-white/5 text-zinc-400 hover:bg-zinc-700"
+              onClick={() => setView("actions")}
+            >
+              <Command className="h-3 w-3" />
+              <span>K</span>
+            </div>
+          </div>
+        ) : view === "docker" ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("gquick-docker-refresh"))}
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10 cursor-pointer text-zinc-200"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span className="hidden min-[520px]:inline">Refresh</span>
+            </button>
+            <div
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium border transition-colors cursor-pointer bg-zinc-800 border-white/5 text-zinc-400 hover:bg-zinc-700"
+              onClick={() => setView("actions")}
+            >
+              <Command className="h-3 w-3" />
+              <span>K</span>
+            </div>
+          </div>
         ) : (
           <div
             className={cn(
@@ -1418,12 +1475,12 @@ function App() {
             </div>
           </div>
         ) : view === "notes" ? (
-          <NotesView onClose={() => setView("search")} initialNoteId={initialNoteId ?? undefined} />
+          <NotesView initialNoteId={initialNoteId ?? undefined} searchQuery={notesSearchQuery} />
         ) : view === "docker" ? (
-          <DockerView initialImage={dockerInitialImage} onClose={() => setView("search")} />
+          <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
         ) : view === "chat" ? (
           <div className="flex flex-col h-[300px]">
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
               {notesContext && (
                 <div className="flex flex-col gap-1.5 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/10">
                   <div className="flex items-center gap-1.5 text-[11px] text-amber-400 font-medium">
@@ -1439,7 +1496,7 @@ function App() {
                   </div>
                 </div>
               )}
-              {messages.map(msg => (
+              {messages.filter(msg => msg.role !== "tool").map(msg => (
                 <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
                   <div className={cn(
                     "h-8 w-8 rounded-full flex items-center justify-center shrink-0 border",
@@ -1448,7 +1505,7 @@ function App() {
                     {msg.role === "assistant" ? "G" : <User className="h-4 w-4" />}
                   </div>
                   <div className={cn(
-                    "rounded-2xl px-4 py-2 text-sm max-w-[85%] border",
+                    "rounded-2xl px-4 py-2 text-sm max-w-[85%] border break-words overflow-hidden",
                     msg.role === "assistant" ? "bg-white/5 text-zinc-200 border-white/5" : "bg-blue-600/10 text-blue-100 border-blue-500/20"
                   )}>
                     {msg.role === "assistant" ? (
@@ -1483,6 +1540,15 @@ function App() {
                 </div>
               ))}
               <div ref={chatEndRef} />
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-blue-500/20 border border-blue-500/30 text-blue-400 hover:bg-blue-500/30 rounded-full p-1.5 backdrop-blur transition-colors cursor-pointer z-10"
+                  aria-label="Scroll to bottom"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
         ) : query ? (
@@ -1497,6 +1563,12 @@ function App() {
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Analyzing files with AI...
+              </div>
+            )}
+            {isSearching && /^docker\s*:/i.test(query.trim()) && (
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Searching Docker Hub and local images...
               </div>
             )}
             {inlineCommand && getTerminalCommand(query) !== null && (

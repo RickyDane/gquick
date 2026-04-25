@@ -8,6 +8,8 @@
 
 GQuick follows a **Tauri 2.0 architecture** with a clear separation between a Rust-native backend (system integration, screen capture, OCR, file indexing, shortcuts, tray) and a React frontend (UI, plugin system, settings, AI chat). The app uses a transparent, borderless window that can be toggled via global shortcuts.
 
+The **Plugin Tools** feature extends the plugin system so that plugins can expose structured functions that AI models (OpenAI, Kimi, Gemini, Claude) can invoke during chat conversations. Tool definitions are provider-agnostic; format conversion happens at API request time. Tool results feed back into conversation history, enabling multi-turn tool use. See `arch/plugin-tools.md` for full architecture.
+
 ```mermaid
 graph TB
     subgraph "Frontend (React 19 + TypeScript)"
@@ -21,6 +23,9 @@ graph TB
         B --> J[File Search]
         B --> K[Translate]
         B --> BB[Notes]
+        B --> NN[Network Info]
+        B --> TM[Tool Manager<br/>Plugin Tools for AI Chat]
+        A --> TM
     end
 
     subgraph "Tauri Bridge"
@@ -110,6 +115,29 @@ Located in `src/plugins/`. Each plugin implements `GQuickPlugin` interface:
 - **webSearch**: Opens Google search in default browser
 - **translate**: AI-powered translation with quick-translate prefixes (`t:`, `tr:`, `>`) and full translation UI
 - **notes**: Quick capture, search, and full CRUD notes management with SQLite persistence
+- **networkInfo**: Displays local network information
+
+### Plugin Tools for AI Chat
+
+Plugins can optionally expose `tools` — structured functions the AI can invoke during chat. This enables the AI to perform real actions: search files, read documents, run calculations, query Docker, save notes, and launch apps.
+
+**Architecture:**
+- `src/plugins/types.ts` — `PluginTool`, `ToolResult`, `ToolParameter` interfaces added to `GQuickPlugin`
+- `src/plugins/toolManager.ts` — Discovers all tools (`getAllTools()`) and routes execution (`executeTool()`)
+- `src/utils/toolStreaming.ts` — Provider-specific streaming with tool call accumulation
+- Tool calls are accumulated during SSE streaming, executed when the stream completes, and results fed back as new messages
+- All three providers supported: OpenAI/Kimi (function calling), Gemini (function declarations), Anthropic (tool use)
+
+**Initial Tools:**
+| Plugin | Tools |
+|--------|-------|
+| calculator | `calculate` |
+| fileSearch | `search_files`, `read_file` |
+| notes | `search_notes`, `create_note` |
+| docker | `list_containers`, `container_status` |
+| webSearch | `web_search` |
+| appLauncher | `list_apps`, `open_app` |
+| networkInfo | `get_network_info` |
 
 ## Data Flow
 
@@ -171,6 +199,8 @@ App.tsx renders chat UI with message history
     ↓
 User sends message (+ optional image attachments up to 5)
     ↓
+App.tsx collects available tools from all plugins via toolManager
+    ↓
 App.tsx calls streaming API based on selected provider:
     - OpenAI / Kimi → streamOpenAI (SSE)
     - Google Gemini → streamGemini (SSE)
@@ -178,7 +208,13 @@ App.tsx calls streaming API based on selected provider:
     ↓
 Assistant response streams in real-time with Markdown rendering
     ↓
-Supports multi-turn conversation with image inputs
+If AI decides to use tools:
+    - Stream accumulates tool call arguments
+    - App.tsx executes tools via plugin executeTool()
+    - Tool results appended to conversation
+    - Follow-up request sent for final response
+    ↓
+Supports multi-turn conversation with image inputs and tool use
 ```
 
 ### Quick Translate Flow
@@ -346,11 +382,13 @@ The AI chat, translate, and smart file search features all make **real API calls
 | `src/Settings.tsx` | API provider config, shortcut configuration, model fetching |
 | `src/main.tsx` | Window routing (App vs Selector) |
 | `src/utils/streaming.ts` | SSE streaming implementations for OpenAI, Gemini, Anthropic |
+| `src/utils/toolStreaming.ts` | Provider-specific tool call streaming + accumulation |
 | `src/utils/quickTranslate.ts` | Quick translate prefix detection + API calls |
 | `src/components/MarkdownMessage.tsx` | Markdown rendering for chat messages |
 | `src/components/ShortcutRecorder.tsx` | Interactive global shortcut recording |
-| `src/plugins/index.ts` | Plugin registry (7 plugins) |
-| `src/plugins/types.ts` | Plugin interface definitions |
+| `src/plugins/index.ts` | Plugin registry (8 plugins) |
+| `src/plugins/types.ts` | Plugin interface definitions (including PluginTool) |
+| `src/plugins/toolManager.ts` | Tool discovery and execution routing |
 | `src/plugins/appLauncher.tsx` | Cross-platform app discovery and launching |
 | `src/plugins/fileSearch.tsx` | Fast + smart file search with AI ranking |
 | `src/plugins/calculator.tsx` | Math expression evaluation |
@@ -358,6 +396,7 @@ The AI chat, translate, and smart file search features all make **real API calls
 | `src/plugins/webSearch.tsx` | Google search via default browser |
 | `src/plugins/translate.tsx` | AI translation with quick translate and full UI |
 | `src/plugins/notes.tsx` | Quick capture, search, open view action for notes |
+| `src/plugins/networkInfo.tsx` | Local network information display |
 | `src/components/NotesView.tsx` | Full CRUD notes management UI |
 | `package.json` | Frontend dependencies and scripts |
 | `vite.config.ts` | Vite build config with Tauri dev server settings |
@@ -392,10 +431,13 @@ Based on code analysis, the project is in **active development with core feature
    - System tray
    - Image attachments in chat
 
-2. **Partially implemented / potential improvements**:
-   - API keys stored in plaintext localStorage
-   - File index limited to home directory, max depth 6
-   - No persistent chat history
+2. **In Progress / New Features**:
+    - **Plugin Tools for AI Chat**: Architecture defined in `arch/plugin-tools.md`. Plugins expose tools; AI can call them during chat. Implementation pending across `src/plugins/`, `src/utils/streaming.ts`, and `src/App.tsx`.
+
+3. **Partially implemented / potential improvements**:
+    - API keys stored in plaintext localStorage
+    - File index limited to home directory, max depth 6
+    - No persistent chat history
 
 ## Key Decisions
 
@@ -409,6 +451,7 @@ Based on code analysis, the project is in **active development with core feature
 8. **File index caching**: 5-minute TTL balances freshness vs performance
 9. **SQLite via rusqlite for notes persistence**: Notes stored in local SQLite database with `rusqlite` crate for cross-platform persistence without external dependencies
 10. **Docker boundary**: Frontend owns Docker Hub public API search and confirmations; Rust owns local Docker CLI/Compose execution with typed commands, CLI/daemon detection, and structured errors.
+11. **Plugin Tools architecture**: Plugins optionally expose `tools` array + `executeTool` method. Tool discovery is centralized via `toolManager.ts`. Provider-specific format conversion happens at API call time. Tool results feed back into conversation as new messages, enabling multi-turn tool use.
 
 ## Docker Expansion Notes
 

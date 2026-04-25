@@ -12,6 +12,7 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "
 const bundleRoot = path.join(repoRoot, "src-tauri", "macos-bundle");
 const frameworksDir = path.join(bundleRoot, "Frameworks");
 const tessdataDir = path.join(bundleRoot, "tessdata");
+const cargoManifestPath = path.join(repoRoot, "src-tauri", "Cargo.toml");
 const signingIdentity = process.env.APPLE_SIGNING_IDENTITY?.trim();
 
 fs.rmSync(bundleRoot, { recursive: true, force: true });
@@ -22,6 +23,54 @@ const seen = new Map();
 
 function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: "utf8" }).trim();
+}
+
+function readCargoPackageName(manifestPath) {
+  const manifest = fs.readFileSync(manifestPath, "utf8");
+  let inPackageSection = false;
+
+  for (const line of manifest.split("\n")) {
+    const section = line.match(/^\s*\[([^\]]+)]\s*$/);
+    if (section) {
+      inPackageSection = section[1] === "package";
+      continue;
+    }
+
+    if (!inPackageSection) {
+      continue;
+    }
+
+    const name = line.match(/^\s*name\s*=\s*["']([^"']+)["']\s*$/);
+    if (name) {
+      return name[1];
+    }
+  }
+
+  return null;
+}
+
+function resolveReleaseExecutablePaths() {
+  const packageName = readCargoPackageName(cargoManifestPath);
+  const binaryNames = [packageName, "tauri-app"].filter(
+    (name, index, all) => name && all.indexOf(name) === index,
+  );
+  const targetRoot = path.join(repoRoot, "src-tauri", "target");
+  const releaseDirs = [path.join(targetRoot, "release")];
+
+  if (fs.existsSync(targetRoot)) {
+    releaseDirs.push(
+      ...fs
+        .readdirSync(targetRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(targetRoot, entry.name, "release")),
+    );
+  }
+
+  const executablePaths = releaseDirs
+    .flatMap((releaseDir) => binaryNames.map((binaryName) => path.join(releaseDir, binaryName)))
+    .filter((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+
+  return executablePaths.filter((candidate, index, all) => all.indexOf(candidate) === index);
 }
 
 function codesign(file) {
@@ -139,15 +188,7 @@ for (const [source, destination] of seen) {
   codesign(destination);
 }
 
-const executableCandidates = [
-  path.join(repoRoot, "src-tauri", "target", "release", "tauri-app"),
-  ...fs
-    .readdirSync(path.join(repoRoot, "src-tauri", "target"), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(repoRoot, "src-tauri", "target", entry.name, "release", "tauri-app")),
-].filter((candidate) => fs.existsSync(candidate));
-
-const executablePaths = executableCandidates.filter((candidate, index, all) => all.indexOf(candidate) === index);
+const executablePaths = resolveReleaseExecutablePaths();
 for (const executable of executablePaths) {
   for (const dep of parseOtoolDeps(executable)) {
     const basename = path.basename(dep);

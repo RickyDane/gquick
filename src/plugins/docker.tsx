@@ -53,6 +53,7 @@ export const dockerPlugin: GQuickPlugin = {
     keywords: ["docker", "container", "image", "hub", "compose"],
     queryPrefixes: [/^docker\s*:/i],
   },
+  searchDebounceMs: 300,
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     const trimmedQuery = query.trim();
 

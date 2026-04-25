@@ -1,8 +1,16 @@
 // Streaming utilities for AI chat APIs
+import { ToolCall } from "../plugins/types";
 
 export interface StreamCallbacks {
   onContent: (text: string) => void;
   onDone: () => void;
+  onError: (error: string) => void;
+}
+
+export interface StreamToolCallbacks {
+  onToolCall?: (toolCall: ToolCall) => void;
+  onContent: (text: string) => void;
+  onDone: (toolCalls?: ToolCall[]) => void;
   onError: (error: string) => void;
 }
 
@@ -178,4 +186,212 @@ export async function streamAnthropic(
   );
 
   callbacks.onDone();
+}
+
+// ------------------------------------------------------------------
+// Tool-aware streaming variants
+// ------------------------------------------------------------------
+
+export async function streamOpenAITools(
+  url: string,
+  headers: Record<string, string>,
+  body: any,
+  callbacks: StreamToolCallbacks
+) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+    callbacks.onError(err.error?.message || `API error: ${res.status}`);
+    return;
+  }
+
+  let content = "";
+  const toolCallAcc = new Map<number, { id: string; name: string; args: string }>();
+
+  await readSSEStream(
+    res,
+    (line) => {
+      if (!line.startsWith("data: ")) return;
+      const data = line.slice(6);
+      if (data === "[DONE]") return;
+      try {
+        const parsed = JSON.parse(data);
+        const choice = parsed.choices?.[0];
+        const delta = choice?.delta;
+
+        if (delta?.content) {
+          content += delta.content;
+          callbacks.onContent(content);
+        }
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const acc = toolCallAcc.get(tc.index) ?? { id: "", name: "", args: "" };
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.name += tc.function.name;
+            if (tc.function?.arguments) acc.args += tc.function.arguments;
+            toolCallAcc.set(tc.index, acc);
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    },
+    callbacks.onError
+  );
+
+  if (toolCallAcc.size > 0) {
+    const toolCalls: ToolCall[] = [];
+    const entries = Array.from(toolCallAcc.entries()).sort((a, b) => a[0] - b[0]);
+    for (const [, acc] of entries) {
+      try {
+        const args = acc.args ? JSON.parse(acc.args) : {};
+        toolCalls.push({ id: acc.id, name: acc.name, arguments: args });
+      } catch {
+        toolCalls.push({ id: acc.id, name: acc.name, arguments: { _raw: acc.args } });
+      }
+    }
+    callbacks.onDone(toolCalls);
+  } else {
+    callbacks.onDone();
+  }
+}
+
+export async function streamGeminiTools(
+  url: string,
+  headers: Record<string, string>,
+  body: any,
+  callbacks: StreamToolCallbacks
+) {
+  const res = await fetch(url + "&alt=sse", {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+    callbacks.onError(err.error?.message || `API error: ${res.status}`);
+    return;
+  }
+
+  let content = "";
+  const toolCalls: ToolCall[] = [];
+
+  await readSSEStream(
+    res,
+    (line) => {
+      if (!line.startsWith("data: ")) return;
+      const data = line.slice(6);
+      try {
+        const parsed = JSON.parse(data);
+        const parts = parsed.candidates?.[0]?.content?.parts;
+        if (parts && parts[0]?.text) {
+          content += parts[0].text;
+          callbacks.onContent(content);
+        }
+        if (parts) {
+          for (const part of parts) {
+            if (part.functionCall) {
+              const newCall = {
+                id: `gemini-${Date.now()}-${toolCalls.length}`,
+                name: part.functionCall.name,
+                arguments: part.functionCall.args || {},
+              };
+              const isDuplicate = toolCalls.some(
+                tc => tc.name === newCall.name && JSON.stringify(tc.arguments) === JSON.stringify(newCall.arguments)
+              );
+              if (!isDuplicate) {
+                toolCalls.push(newCall);
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    },
+    callbacks.onError
+  );
+
+  callbacks.onDone(toolCalls.length > 0 ? toolCalls : undefined);
+}
+
+export async function streamAnthropicTools(
+  url: string,
+  headers: Record<string, string>,
+  body: any,
+  callbacks: StreamToolCallbacks
+) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+    callbacks.onError(err.error?.message || `API error: ${res.status}`);
+    return;
+  }
+
+  let content = "";
+  const toolAcc = new Map<number, { id: string; name: string; input: string }>();
+
+  await readSSEStream(
+    res,
+    (line) => {
+      if (!line.startsWith("data: ")) return;
+      const data = line.slice(6);
+      if (data === "[DONE]") return;
+      try {
+        const parsed = JSON.parse(data);
+
+        if (parsed.type === "content_block_start") {
+          if (parsed.content_block?.type === "tool_use") {
+            toolAcc.set(parsed.index, {
+              id: parsed.content_block.id,
+              name: parsed.content_block.name,
+              input: "",
+            });
+          }
+        } else if (parsed.type === "content_block_delta") {
+          if (parsed.delta?.type === "text_delta" && parsed.delta.text) {
+            content += parsed.delta.text;
+            callbacks.onContent(content);
+          } else if (
+            parsed.delta?.type === "input_json_delta" &&
+            parsed.delta.partial_json
+          ) {
+            const acc = toolAcc.get(parsed.index);
+            if (acc) acc.input += parsed.delta.partial_json;
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    },
+    callbacks.onError
+  );
+
+  if (toolAcc.size > 0) {
+    const toolCalls: ToolCall[] = [];
+    const entries = Array.from(toolAcc.entries()).sort((a, b) => a[0] - b[0]);
+    for (const [, acc] of entries) {
+      try {
+        const input = acc.input ? JSON.parse(acc.input) : {};
+        toolCalls.push({ id: acc.id, name: acc.name, arguments: input });
+      } catch {
+        toolCalls.push({ id: acc.id, name: acc.name, arguments: { _raw: acc.input } });
+      }
+    }
+    callbacks.onDone(toolCalls);
+  } else {
+    callbacks.onDone();
+  }
 }

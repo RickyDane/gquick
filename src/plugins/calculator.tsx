@@ -1,6 +1,6 @@
 import { Calculator } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { GQuickPlugin, SearchResultItem } from "./types";
+import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 
 const MAX_CALCULATOR_QUERY_LENGTH = 256;
 const MAX_PARSE_DEPTH = 64;
@@ -130,6 +130,33 @@ export const calculatorPlugin: GQuickPlugin = {
     subtitle: "Simple math expressions",
     icon: Calculator,
     keywords: ["calc", "math", "add", "subtract", "multiply", "divide"],
+  },
+  tools: [
+    {
+      name: "calculate",
+      description: "Evaluate a mathematical expression. Supports +, -, *, /, parentheses, and decimals.",
+      parameters: {
+        type: "object",
+        properties: {
+          expression: {
+            type: "string",
+            description: "Math expression to evaluate, e.g. '(15 + 7) * 3'",
+          },
+        },
+        required: ["expression"],
+      },
+    },
+  ],
+  executeTool: async (_name: string, args: Record<string, any>): Promise<ToolResult> => {
+    const expression = args.expression;
+    if (typeof expression !== "string") {
+      return { content: "", success: false, error: "Missing expression parameter" };
+    }
+    const result = evaluateMathExpression(expression);
+    if (result === null) {
+      return { content: "", success: false, error: "Invalid or unsupported expression" };
+    }
+    return { content: result.toString(), success: true };
   },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
     try {

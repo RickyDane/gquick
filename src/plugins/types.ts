@@ -1,6 +1,39 @@
 import React from "react";
 import { LucideIcon } from "lucide-react";
 
+export type ToolParameterType = "string" | "number" | "boolean" | "integer" | "array" | "object";
+
+export interface ToolParameter {
+  type: ToolParameterType;
+  description?: string;
+  enum?: (string | number)[];
+  items?: ToolParameter;
+  properties?: Record<string, ToolParameter>;
+  required?: string[];
+}
+
+export interface PluginTool {
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, ToolParameter>;
+    required?: string[];
+  };
+}
+
+export interface ToolResult {
+  content: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+}
+
 export type QueryPrefixMatcher = string | RegExp;
 
 export interface PluginAction {
@@ -42,4 +75,8 @@ export interface GQuickPlugin {
   searchDebounceMs?: number;
   // Returns items based on query
   getItems: (query: string) => Promise<SearchResultItem[]>;
+  /** Optional tools this plugin exposes for AI chat */
+  tools?: PluginTool[];
+  /** Execute a tool by name with given arguments. Required if tools are defined. */
+  executeTool?: (name: string, args: Record<string, any>) => Promise<ToolResult>;
 }

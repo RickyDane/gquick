@@ -10,13 +10,13 @@ export function MarkdownMessage({ content }: MarkdownMessageProps) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed break-words">{children}</p>,
         h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 text-zinc-100">{children}</h1>,
         h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3 text-zinc-100">{children}</h2>,
         h3: ({ children }) => <h3 className="text-sm font-semibold mb-1 mt-2 text-zinc-200">{children}</h3>,
         ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
-        li: ({ children }) => <li className="text-zinc-300">{children}</li>,
+        li: ({ children }) => <li className="text-zinc-300 break-words">{children}</li>,
         code: ({ children, className }) => {
           const isInline = !className;
           if (isInline) {

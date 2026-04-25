@@ -26,10 +26,6 @@ export function isQuickTranslateQuery(query: string): { isQuick: boolean; text: 
   if (lower.startsWith("tr: ") || lower.startsWith("tr:")) {
     return { isQuick: true, text: trimmed.substring(3).trim() };
   }
-  if (trimmed.startsWith("> ")) {
-    return { isQuick: true, text: trimmed.substring(2).trim() };
-  }
-
   return { isQuick: false, text: "" };
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box } from "lucide-react";
+import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal } from "lucide-react";
 import { cn } from "./utils/cn";
 import { plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
@@ -79,6 +79,109 @@ interface Message {
   images?: ChatImage[];
 }
 
+interface InlineTerminalResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  canceled: boolean;
+}
+
+interface InlineCommandState {
+  id: string;
+  command: string;
+  status: "idle" | "running" | "finished" | "failed" | "canceled" | "blocked";
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  error?: string;
+}
+
+const INTERACTIVE_TERMINAL_COMMANDS = new Set([
+  "ssh", "sudo", "su", "vim", "vi", "nvim", "nano", "emacs", "less", "more",
+  "top", "htop", "watch", "passwd", "mysql", "psql", "sqlite3", "ftp", "sftp",
+  "telnet", "screen", "tmux", "irb", "pry", "rails", "iex", "erl",
+]);
+
+const REPL_COMMANDS = new Set(["python", "python3", "node", "ruby", "php", "R"]);
+
+interface InlineTerminalOutputEvent {
+  id: string;
+  stream: "stdout" | "stderr";
+  chunk: string;
+}
+
+function getTerminalCommand(query: string): string | null {
+  const trimmed = query.trim();
+  if (!trimmed.startsWith(">")) return null;
+  return trimmed.substring(1).trim();
+}
+
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+
+  for (const char of command.trim()) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+    if ((char === "'" || char === '"') && !quote) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = null;
+      continue;
+    }
+    if (/\s/.test(char) && !quote) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function getExecutableName(token: string): string {
+  return token.split("/").pop() ?? token;
+}
+
+function isEnvAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function isLikelyInteractiveCommand(command: string): boolean {
+  const tokens = tokenizeCommand(command);
+  if (tokens.length === 0) return false;
+
+  let index = 0;
+  while (isEnvAssignment(tokens[index])) index += 1;
+
+  const wrapper = getExecutableName(tokens[index] ?? "");
+  if (["env", "command", "exec"].includes(wrapper)) {
+    index += 1;
+    while (isEnvAssignment(tokens[index])) index += 1;
+  }
+
+  const executable = getExecutableName(tokens[index] ?? "");
+  if (!executable) return false;
+  if (INTERACTIVE_TERMINAL_COMMANDS.has(executable)) return true;
+
+  return REPL_COMMANDS.has(executable) && tokens.length === index + 1;
+}
+
 function App() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -99,10 +202,16 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [inlineCommand, setInlineCommand] = useState<InlineCommandState | null>(null);
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
   const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
   const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
+  const inlineCommandRef = useRef<InlineCommandState | null>(null);
+
+  useEffect(() => {
+    inlineCommandRef.current = inlineCommand;
+  }, [inlineCommand]);
 
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
@@ -235,6 +344,7 @@ function App() {
         setDockerInitialImage(null);
         setIsTranslating(false);
         setIsSearching(false);
+        setInlineCommand(null);
         setAttachedImages([]);
         setNotesContext(null);
       });
@@ -344,6 +454,157 @@ function App() {
     });
   }, []);
 
+  const cancelInlineCommand = useCallback(async () => {
+    const current = inlineCommandRef.current;
+    if (!current || current.status !== "running") return;
+    try {
+      await invoke("cancel_terminal_command", { id: current.id });
+    } catch (error) {
+      console.error("Failed to cancel terminal command:", error);
+    }
+    setInlineCommand(prev => {
+      if (!prev || prev.id !== current.id) return prev;
+      const next: InlineCommandState = { ...prev, status: "canceled" };
+      inlineCommandRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const confirmCancelInlineCommand = useCallback(async (forcePrompt = false): Promise<boolean> => {
+    const current = inlineCommandRef.current;
+    if (!forcePrompt && (!current || current.status !== "running")) return true;
+
+    const shouldCancel = window.confirm(
+      current?.status === "running"
+        ? `Inline command is still running:\n\n${current.command}\n\nClosing GQuick will cancel it. Continue?`
+        : "An inline command is still running. Closing GQuick will cancel it. Continue?"
+    );
+    if (!shouldCancel) return false;
+    await invoke("cancel_all_terminal_commands");
+    if (current?.status === "running") {
+      setInlineCommand(prev => {
+        if (!prev) return prev;
+        const next: InlineCommandState = { ...prev, status: "canceled" };
+        inlineCommandRef.current = next;
+        return next;
+      });
+    }
+    return true;
+  }, []);
+
+  const hideWindowSafely = useCallback(async () => {
+    const canHide = await confirmCancelInlineCommand();
+    if (!canHide) return;
+    await invoke("hide_main_window");
+  }, [confirmCancelInlineCommand]);
+
+  const runExternalTerminalCommand = useCallback(async (command: string) => {
+    try {
+      await invoke("open_terminal_command", { command });
+      await hideWindowSafely();
+    } catch (error) {
+      setInlineCommand({
+        id: `external-${Date.now()}`,
+        command,
+        status: "failed",
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [hideWindowSafely]);
+
+  const runInlineTerminalCommand = useCallback(async (command: string) => {
+    if (inlineCommandRef.current?.status === "running") {
+      setInlineCommand(prev => prev ? { ...prev, error: "Another inline command is already running. Cancel it or wait for it to finish." } : prev);
+      return;
+    }
+
+    if (isLikelyInteractiveCommand(command)) {
+      const blockedCommand: InlineCommandState = {
+        id: `blocked-${Date.now()}`,
+        command,
+        status: "blocked",
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error: "This command needs an interactive terminal. Press Enter to open it in Terminal.",
+      };
+      inlineCommandRef.current = blockedCommand;
+      setInlineCommand(blockedCommand);
+      return;
+    }
+
+    const id = `terminal-${Date.now()}`;
+    const runningCommand: InlineCommandState = { id, command, status: "running", stdout: "", stderr: "", exitCode: null };
+    inlineCommandRef.current = runningCommand;
+    setInlineCommand(runningCommand);
+
+    try {
+      const result = await invoke<InlineTerminalResult>("run_terminal_command_inline", { id, command });
+      setInlineCommand(prev => {
+        if (!prev || prev.id !== id) return prev;
+        const next: InlineCommandState = {
+          ...prev,
+          status: result.canceled ? "canceled" : "finished",
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        };
+        inlineCommandRef.current = next;
+        return next;
+      });
+    } catch (error) {
+      setInlineCommand(prev => {
+        if (!prev || prev.id !== id) return prev;
+        const next: InlineCommandState = {
+          ...prev,
+          status: prev.status === "canceled" ? "canceled" : "failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        inlineCommandRef.current = next;
+        return next;
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    let unlistenClose: UnlistenFn | undefined;
+    let unlistenOutput: UnlistenFn | undefined;
+    const setupListener = async () => {
+      unlistenClose = await listen("terminal-close-requested", async () => {
+        const canHide = await confirmCancelInlineCommand(true);
+        if (canHide) {
+          await invoke("hide_main_window").catch((error) => {
+            console.error("Failed to hide window after terminal confirmation:", error);
+          });
+        } else {
+          await getCurrentWindow().show().catch(() => {});
+          await getCurrentWindow().setFocus().catch(() => {});
+        }
+      });
+
+      unlistenOutput = await listen<InlineTerminalOutputEvent>("terminal-command-output", (event) => {
+        const { id, stream, chunk } = event.payload;
+        setInlineCommand(prev => {
+          if (!prev || prev.id !== id || prev.status !== "running") return prev;
+          const next: InlineCommandState = {
+            ...prev,
+            [stream]: prev[stream] + chunk,
+          };
+          inlineCommandRef.current = next;
+          return next;
+        });
+      });
+    };
+    setupListener();
+    return () => {
+      unlistenClose?.();
+      unlistenOutput?.();
+    };
+  }, [confirmCancelInlineCommand]);
+
   // Paste handler for images
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
@@ -441,9 +702,7 @@ function App() {
             setQuery("");
           }
         } else {
-          // Blur input to trigger Focused(false) event which hides window
-          inputRef.current?.blur();
-          getCurrentWindow().hide();
+          void hideWindowSafely();
         }
       }
     };
@@ -464,7 +723,7 @@ function App() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", resetLeftShift);
     };
-  }, [view, attachedImages]);
+  }, [view, attachedImages, hideWindowSafely]);
 
   // Fetch items from plugins
   useEffect(() => {
@@ -475,6 +734,40 @@ function App() {
     }
 
     const quick = isQuickTranslateQuery(query);
+    const terminalCommand = getTerminalCommand(query);
+
+    if (terminalCommand !== null) {
+      setIsTranslating(false);
+      setIsSearching(false);
+
+      if (terminalCommand.length === 0) {
+        setItems([{
+          id: "terminal-empty",
+          pluginId: "terminal-command",
+          title: "Run terminal command",
+          subtitle: "Type a command after >",
+          icon: Terminal,
+          score: 100,
+          onSelect: () => {},
+        }]);
+        return;
+      }
+
+      setItems([{
+        id: "terminal-run",
+        pluginId: "terminal-command",
+        title: terminalCommand,
+        subtitle: isLikelyInteractiveCommand(terminalCommand)
+          ? "Interactive command: Enter opens Terminal • inline disabled"
+          : inlineCommand?.status === "running"
+            ? `Inline command already running: ${inlineCommand.command}`
+            : "Enter: open in terminal • Left Shift + Enter: run inline",
+        icon: Terminal,
+        score: 100,
+        onSelect: () => void runExternalTerminalCommand(terminalCommand),
+      }]);
+      return;
+    }
 
     if (quick.isQuick && quick.text.length > 0) {
       // Handle quick translate directly with loading state
@@ -540,7 +833,7 @@ function App() {
 
     const timer = setTimeout(fetchItems, 150);
     return () => clearTimeout(timer);
-  }, [query, view]);
+  }, [query, view, runExternalTerminalCommand, inlineCommand?.status, inlineCommand?.command]);
 
   const totalItems = items.length;
 
@@ -598,7 +891,19 @@ function App() {
       e.preventDefault();
       setActiveIndex(prev => Math.max(prev - 1, 0));
     } else if (e.key === "Enter") {
+      const terminalCommand = getTerminalCommand(query);
+      if (terminalCommand !== null && terminalCommand.length > 0 && isLeftShiftPressedRef.current) {
+        e.preventDefault();
+        void runInlineTerminalCommand(terminalCommand);
+        return;
+      }
+      if (terminalCommand !== null && terminalCommand.length > 0) {
+        e.preventDefault();
+        void runExternalTerminalCommand(terminalCommand);
+        return;
+      }
       if (totalItems > 0 && items[activeIndex]) {
+        e.preventDefault();
         items[activeIndex].onSelect();
       }
     }
@@ -1114,6 +1419,61 @@ function App() {
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Analyzing files with AI...
+              </div>
+            )}
+            {inlineCommand && getTerminalCommand(query) !== null && (
+              <div className="mb-2 rounded-xl border border-white/10 bg-zinc-950/70 overflow-hidden">
+                <div className="flex items-center justify-between gap-3 border-b border-white/5 px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    {inlineCommand.status === "running" ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                    ) : (
+                      <Terminal className="h-4 w-4 text-emerald-400" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-zinc-200">{inlineCommand.command}</div>
+                      <div className="text-[10px] text-zinc-500">
+                        {inlineCommand.status === "running"
+                          ? "Running inline..."
+                          : inlineCommand.status === "canceled"
+                            ? "Canceled"
+                            : inlineCommand.status === "blocked"
+                              ? "Needs interactive terminal"
+                              : inlineCommand.status === "failed"
+                                ? "Failed"
+                                : `Exited with code ${inlineCommand.exitCode ?? "unknown"}`}
+                      </div>
+                    </div>
+                  </div>
+                  {inlineCommand.status === "running" && (
+                    <button
+                      onClick={() => void cancelInlineCommand()}
+                      className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  {inlineCommand.status === "blocked" && (
+                    <button
+                      onClick={() => void runExternalTerminalCommand(inlineCommand.command)}
+                      className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
+                    >
+                      Open Terminal
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed">
+                  {inlineCommand.error && <pre className={cn("whitespace-pre-wrap break-words", inlineCommand.status === "blocked" ? "text-amber-300" : "text-red-300")}>{inlineCommand.error}</pre>}
+                  {inlineCommand.stdout && (
+                    <pre className="whitespace-pre-wrap break-words text-zinc-200">{inlineCommand.stdout}</pre>
+                  )}
+                  {inlineCommand.stderr && (
+                    <pre className="mt-2 whitespace-pre-wrap break-words text-amber-300">{inlineCommand.stderr}</pre>
+                  )}
+                  {!inlineCommand.error && !inlineCommand.stdout && !inlineCommand.stderr && (
+                    <div className="text-zinc-500">{inlineCommand.status === "running" ? "Waiting for output..." : "No output"}</div>
+                  )}
+                </div>
               </div>
             )}
             {items.length > 0 ? (

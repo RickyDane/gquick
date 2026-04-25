@@ -6076,6 +6076,7 @@ dependencies = [
  "dirs 5.0.1",
  "fuzzy-matcher",
  "image",
+ "libc",
  "rayon",
  "reqwest 0.12.28",
  "rusqlite",

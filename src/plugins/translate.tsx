@@ -259,8 +259,7 @@ function TranslateView({ initialText = "" }: TranslateViewProps) {
 function isQuickTranslate(query: string): boolean {
   const trimmed = query.trim().toLowerCase();
   return trimmed.startsWith("t: ") || trimmed.startsWith("t:") ||
-         trimmed.startsWith("tr: ") || trimmed.startsWith("tr:") ||
-         query.trim().startsWith("> ");
+         trimmed.startsWith("tr: ") || trimmed.startsWith("tr:");
 }
 
 export const translatePlugin: GQuickPlugin = {

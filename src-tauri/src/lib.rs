@@ -297,9 +297,12 @@ struct SmartFileInfo {
     full_content: Option<String>,
 }
 
-use std::io::Read;
+use std::collections::HashMap;
+use std::io::{self, Read};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -321,6 +324,27 @@ struct ShortcutState {
 
 struct DialogState {
     is_open: std::sync::Mutex<bool>,
+}
+
+struct TerminalState {
+    inline_processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCommandResult {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    canceled: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCommandOutputEvent {
+    id: String,
+    stream: String,
+    chunk: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -1204,6 +1228,38 @@ fn docker_timeout(args: &[String]) -> Duration {
     }
 }
 
+fn read_pipe_stream(
+    app: tauri::AppHandle,
+    id: String,
+    stream: &'static str,
+    mut pipe: impl Read + Send + 'static,
+) -> std::thread::JoinHandle<Result<String, String>> {
+    std::thread::spawn(move || {
+        let mut output = String::new();
+        let mut buffer = [0_u8; 8192];
+
+        loop {
+            let bytes_read = pipe.read(&mut buffer).map_err(|e| e.to_string())?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let chunk = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+            output.push_str(&chunk);
+            let _ = app.emit(
+                "terminal-command-output",
+                TerminalCommandOutputEvent {
+                    id: id.clone(),
+                    stream: stream.to_string(),
+                    chunk,
+                },
+            );
+        }
+
+        Ok(output)
+    })
+}
+
 fn read_pipe(
     mut pipe: impl Read + Send + 'static,
 ) -> std::thread::JoinHandle<Result<String, String>> {
@@ -1213,6 +1269,340 @@ fn read_pipe(
             .map_err(|e| e.to_string())?;
         Ok(output)
     })
+}
+
+fn platform_shell_command(command: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", command]);
+        cmd
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-lc", command]);
+        cmd
+    }
+}
+
+fn inline_shell_command(command: &str) -> Command {
+    let mut cmd = platform_shell_command(command);
+    #[cfg(unix)]
+    unsafe {
+        // Put the shell in its own session/process group so cancellation can
+        // terminate commands it spawned instead of only killing the shell.
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    cmd
+}
+
+fn terminate_inline_child(child: &Arc<Mutex<Child>>) -> Result<(), String> {
+    let mut locked = child.lock().map_err(|e| e.to_string())?;
+    let pid = locked.id();
+
+    #[cfg(unix)]
+    {
+        let pgid = format!("-{pid}");
+        let _ = Command::new("kill").args(["-TERM", &pgid]).status();
+        let started = Instant::now();
+        loop {
+            if locked.try_wait().map_err(|e| e.to_string())?.is_some() {
+                return Ok(());
+            }
+            if started.elapsed() > Duration::from_millis(900) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = Command::new("kill").args(["-KILL", &pgid]).status();
+        let _ = locked.wait();
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+        let _ = locked.wait();
+        return Ok(());
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let _ = locked.kill();
+        let _ = locked.wait();
+        return Ok(());
+    }
+}
+
+#[tauri::command]
+fn open_terminal_command(command: String) -> Result<(), String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("Command is empty".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use argv instead of interpolating the command into AppleScript source.
+        // This preserves spaces, quotes, backslashes, and newlines without
+        // relying on fragile AppleScript string escaping.
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "set commandText to item 1 of argv",
+                "-e",
+                "tell application id \"com.apple.Terminal\"",
+                "-e",
+                "activate",
+                "-e",
+                "do script commandText",
+                "-e",
+                "end tell",
+                "-e",
+                "end run",
+                "--",
+                trimmed,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to open Terminal.app: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let details = match (stderr.is_empty(), stdout.is_empty()) {
+                (false, false) => format!("\nstderr: {stderr}\nstdout: {stdout}"),
+                (false, true) => format!("\nstderr: {stderr}"),
+                (true, false) => format!("\nstdout: {stdout}"),
+                (true, true) => String::new(),
+            };
+
+            return Err(format!(
+                "Terminal.app returned exit status {}{}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "unknown".into(), |code| code.to_string()),
+                details
+            ));
+        }
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", "cmd", "/K", trimmed])
+            .spawn()
+            .map_err(|e| format!("Failed to open terminal: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let candidates = [
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "mate-terminal",
+            "alacritty",
+            "kitty",
+            "xterm",
+        ];
+
+        for terminal in candidates {
+            let mut cmd = Command::new(terminal);
+            match terminal {
+                "gnome-terminal" | "xfce4-terminal" | "mate-terminal" => {
+                    cmd.args(["--", "sh", "-lc", trimmed]);
+                }
+                "konsole" => {
+                    cmd.args(["-e", "sh", "-lc", trimmed]);
+                }
+                _ => {
+                    cmd.args(["-e", "sh", "-lc", trimmed]);
+                }
+            }
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        return Err("No supported terminal emulator found".into());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Opening terminal is not supported on this platform".into())
+}
+
+#[tauri::command]
+async fn run_terminal_command_inline(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, TerminalState>,
+    id: String,
+    command: String,
+) -> Result<TerminalCommandResult, String> {
+    let trimmed = command.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Command is empty".into());
+    }
+
+    let processes = Arc::clone(&state.inner().inline_processes);
+
+    run_blocking({
+        let app = app.clone();
+        move || -> Result<TerminalCommandResult, String> {
+            let child = {
+                let mut map = processes.lock().map_err(|e| e.to_string())?;
+                if !map.is_empty() {
+                    return Err("An inline command is already running".into());
+                }
+
+                let mut child = match inline_shell_command(&trimmed)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                {
+                    Ok(child) => child,
+                    Err(e) => return Err(format!("Failed to run command: {e}")),
+                };
+
+                let stdout_handle = child
+                    .stdout
+                    .take()
+                    .map(|stdout| read_pipe_stream(app.clone(), id.clone(), "stdout", stdout));
+                let stderr_handle = child
+                    .stderr
+                    .take()
+                    .map(|stderr| read_pipe_stream(app.clone(), id.clone(), "stderr", stderr));
+                let child = Arc::new(Mutex::new(child));
+                map.insert(id.clone(), Arc::clone(&child));
+                (child, stdout_handle, stderr_handle)
+            };
+
+            let (child, stdout_handle, stderr_handle) = child;
+
+            let status = loop {
+                let maybe_status = {
+                    let mut locked = match child.lock() {
+                        Ok(locked) => locked,
+                        Err(e) => {
+                            if let Ok(mut map) = processes.lock() {
+                                map.remove(&id);
+                            }
+                            return Err(e.to_string());
+                        }
+                    };
+                    match locked.try_wait() {
+                        Ok(status) => status,
+                        Err(e) => {
+                            if let Ok(mut map) = processes.lock() {
+                                map.remove(&id);
+                            }
+                            return Err(format!("Failed to read command status: {e}"));
+                        }
+                    }
+                };
+                if let Some(status) = maybe_status {
+                    break status;
+                }
+                std::thread::sleep(Duration::from_millis(75));
+            };
+
+            {
+                if let Ok(mut map) = processes.lock() {
+                    map.remove(&id);
+                }
+            }
+            let stdout = match stdout_handle {
+                Some(handle) => handle
+                    .join()
+                    .map_err(|_| "Failed to read command stdout".to_string())?
+                    .map_err(|e| format!("Failed to read command stdout: {e}"))?,
+                None => String::new(),
+            };
+            let stderr = match stderr_handle {
+                Some(handle) => handle
+                    .join()
+                    .map_err(|_| "Failed to read command stderr".to_string())?
+                    .map_err(|e| format!("Failed to read command stderr: {e}"))?,
+                None => String::new(),
+            };
+
+            Ok(TerminalCommandResult {
+                stdout,
+                stderr,
+                exit_code: status.code(),
+                canceled: status.code().is_none(),
+            })
+        }
+    })
+    .await?
+}
+
+#[tauri::command]
+fn cancel_terminal_command(
+    state: tauri::State<'_, TerminalState>,
+    id: String,
+) -> Result<(), String> {
+    let child = {
+        let mut map = state.inline_processes.lock().map_err(|e| e.to_string())?;
+        map.remove(&id)
+    };
+
+    if let Some(child) = child {
+        terminate_inline_child(&child)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_all_terminal_commands(state: tauri::State<'_, TerminalState>) -> Result<(), String> {
+    let children = {
+        let mut map = state.inline_processes.lock().map_err(|e| e.to_string())?;
+        map.drain().map(|(_, child)| child).collect::<Vec<_>>()
+    };
+
+    for child in children {
+        terminate_inline_child(&child)?;
+    }
+    Ok(())
+}
+
+fn has_running_inline_command<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    app.try_state::<TerminalState>()
+        .and_then(|state| {
+            state
+                .inline_processes
+                .lock()
+                .ok()
+                .map(|processes| !processes.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+fn request_terminal_close_confirmation<R: Runtime>(window: &tauri::Window<R>, reason: &str) {
+    let _ = window.emit("terminal-close-requested", reason.to_string());
+}
+
+#[tauri::command]
+fn hide_main_window(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())?;
+    window
+        .emit("window-hidden", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
@@ -1536,7 +1926,10 @@ async fn exec_container(id: String, command: Vec<String>) -> Result<DockerComman
     run_blocking(move || exec_container_blocking(id, command)).await?
 }
 
-fn exec_container_blocking(id: String, command: Vec<String>) -> Result<DockerCommandResult, String> {
+fn exec_container_blocking(
+    id: String,
+    command: Vec<String>,
+) -> Result<DockerCommandResult, String> {
     validate_ref(&id, "container id")?;
     if command.is_empty() {
         return Err(docker_err(
@@ -2230,7 +2623,9 @@ fn capture_region(
                     }
                     Err(e) => {
                         eprintln!("Failed to read captured image for OCR: {}", e);
-                        if let Err(emit_err) = app.emit("ocr-error", format!("Failed to read image: {}", e)) {
+                        if let Err(emit_err) =
+                            app.emit("ocr-error", format!("Failed to read image: {}", e))
+                        {
                             eprintln!("Failed to emit ocr-error: {}", emit_err);
                         }
                     }
@@ -2509,6 +2904,10 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(false);
         if is_visible {
+            if has_running_inline_command(app) {
+                let _ = window.emit("terminal-close-requested", "toggle".to_string());
+                return;
+            }
             let _ = window.hide();
             let _ = window.emit("window-hidden", ());
         } else {
@@ -2716,6 +3115,10 @@ pub fn run() {
                 is_open: std::sync::Mutex::new(false),
             });
 
+            app.manage(TerminalState {
+                inline_processes: Arc::new(Mutex::new(HashMap::new())),
+            });
+
             // Initialize SQLite database for notes
             let app_data_dir = app
                 .path()
@@ -2756,6 +3159,11 @@ pub fn run() {
                 if window.label() == "selector" {
                     // Allow selector window to close normally
                 } else {
+                    if has_running_inline_command(&window.app_handle()) {
+                        request_terminal_close_confirmation(window, "close");
+                        api.prevent_close();
+                        return;
+                    }
                     let _ = window.hide();
                     let _ = window.emit("window-hidden", ());
                     api.prevent_close();
@@ -2770,6 +3178,10 @@ pub fn run() {
                     let dialog_state = app_handle.state::<DialogState>();
                     let is_dialog_open = *dialog_state.is_open.lock().unwrap();
                     if !is_dialog_open {
+                        if has_running_inline_command(&app_handle) {
+                            request_terminal_close_confirmation(window, "focus-lost");
+                            return;
+                        }
                         let _ = window.hide();
                         let _ = window.emit("window-hidden", ());
                     }
@@ -2810,7 +3222,12 @@ pub fn run() {
             update_note,
             delete_note,
             search_notes,
-            get_note_by_id
+            get_note_by_id,
+            open_terminal_command,
+            run_terminal_command_inline,
+            cancel_terminal_command,
+            cancel_all_terminal_commands,
+            hide_main_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

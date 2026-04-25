@@ -187,6 +187,60 @@ jobs:
           APPLE_PASSWORD: ${{ matrix.os_name == 'macos-arm' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ matrix.os_name == 'macos-arm' && secrets.APPLE_TEAM_ID || '' }}
 
+      - name: Verify and notarize macOS DMG
+        if: matrix.os_name == 'macos-arm'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ] || [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::warning::Apple signing/notarization secrets are missing. Skipping final DMG notarization."
+            exit 0
+          fi
+
+          shopt -s nullglob
+          app_bundles=(src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
+          dmg_files=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+
+          if [ ${#app_bundles[@]} -eq 0 ]; then
+            echo "::error::No macOS .app bundle found to verify."
+            exit 1
+          fi
+
+          if [ ${#dmg_files[@]} -eq 0 ]; then
+            echo "::error::No macOS .dmg files found to notarize."
+            exit 1
+          fi
+
+          for app in "${app_bundles[@]}"; do
+            echo "Verifying app bundle signature: $app"
+            codesign --verify --deep --strict --verbose=4 "$app"
+            spctl -a -vvv -t exec "$app" || echo "::warning::spctl app assessment did not pass before final DMG notarization: $app"
+          done
+
+          for dmg in "${dmg_files[@]}"; do
+            echo "Signing DMG: $dmg"
+            codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+
+            echo "Submitting DMG for notarization: $dmg"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+
+            echo "Stapling notarization ticket to DMG: $dmg"
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+
+            echo "Validating Gatekeeper assessment for DMG: $dmg"
+            spctl -a -vvv -t open --context context:primary-signature "$dmg"
+          done
+
       # ------------------------------------------------------------------
       # Upload artifacts (CI builds)
       # ------------------------------------------------------------------
@@ -198,7 +252,6 @@ jobs:
           name: gquick-${{ matrix.os_name }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
@@ -218,7 +271,6 @@ jobs:
           generate_release_notes: true
           files: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb

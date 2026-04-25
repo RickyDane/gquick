@@ -106,3 +106,7 @@ You should see `PKCS7 Encrypted data` and a `shrouded keybag`. If the file is co
 These secrets are injected only into the macOS ARM64 build job. Tauri v2 reads them automatically during `tauri build` to sign the `.app` bundle and submit it for notarization. No changes to `tauri.conf.json` are required.
 
 The `beforeBundleCommand` OCR bundling script also reads `APPLE_SIGNING_IDENTITY`. When present, it signs bundled Tesseract/OCR dylibs in `Contents/Resources/Frameworks` with the Developer ID identity and a secure timestamp before Tauri signs and notarizes the final app. Local builds without this secret continue to use ad-hoc signing.
+
+After `tauri build`, CI performs a final macOS-only notarization pass over the generated `.dmg`: it verifies the `.app` signature, signs the `.dmg` with the Developer ID Application identity, submits the `.dmg` with `notarytool --wait`, staples the notarization ticket, and validates the stapled installer with Gatekeeper. This ensures the uploaded release `.dmg` is the notarized/stapled artifact users install from.
+
+Download and install the signed `.dmg` artifact for macOS. Do not distribute or open the raw `.app` bundle from a GitHub Actions artifact ZIP; re-zipping `.app` directories can break macOS code signature metadata and trigger "app is damaged" Gatekeeper errors.

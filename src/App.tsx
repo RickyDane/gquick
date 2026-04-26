@@ -78,6 +78,10 @@ function supportsOpenAIHostedWebSearch(modelId: string): boolean {
   // OpenAI rejects hosted web_search for unsupported Responses models.
   // Keep plugin function tools available, but only send hosted search to known-capable families.
   return [
+    "gpt-5.5",
+    "gpt-5.5-nano",
+    "gpt-5.4",
+    "gpt-5.4-nano",
     "gpt-4o-search-preview",
     "gpt-4o-mini-search-preview",
     "gpt-4o",

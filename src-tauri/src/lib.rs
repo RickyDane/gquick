@@ -4397,7 +4397,6 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             quit_app,
             list_apps,
             get_network_info,

@@ -441,7 +441,7 @@ fn get_note_by_id(state: tauri::State<'_, DbState>, id: i64) -> Result<Option<No
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 struct AppInfo {
     name: String,
     path: String,
@@ -670,6 +670,13 @@ struct Note {
 struct DbState {
     conn: Mutex<rusqlite::Connection>,
 }
+
+struct AppsCacheState {
+    apps: Mutex<Vec<AppInfo>>,
+    last_updated: Mutex<Instant>,
+}
+
+const APPS_CACHE_TTL: Duration = Duration::from_secs(30);
 
 const DEFAULT_FILE_SEARCH_MAX_DEPTH: usize = 12;
 const MIN_FILE_SEARCH_MAX_DEPTH: usize = 6;
@@ -3540,7 +3547,18 @@ fn ensure_app_icon_cached(
 }
 
 #[tauri::command]
-fn list_apps(app: tauri::AppHandle) -> Vec<AppInfo> {
+fn list_apps(
+    app: tauri::AppHandle,
+    cache_state: tauri::State<AppsCacheState>,
+) -> Vec<AppInfo> {
+    {
+        let last_updated = cache_state.last_updated.lock().unwrap();
+        let apps = cache_state.apps.lock().unwrap();
+        if !apps.is_empty() && last_updated.elapsed() < APPS_CACHE_TTL {
+            return apps.clone();
+        }
+    }
+
     let mut apps = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -3688,6 +3706,11 @@ fn list_apps(app: tauri::AppHandle) -> Vec<AppInfo> {
             }
         }
     }
+
+    let mut cached_apps = cache_state.apps.lock().unwrap();
+    let mut last_updated = cache_state.last_updated.lock().unwrap();
+    *cached_apps = apps.clone();
+    *last_updated = Instant::now();
 
     apps
 }
@@ -4326,6 +4349,11 @@ pub fn run() {
 
             app.manage(TerminalState {
                 inline_processes: Arc::new(Mutex::new(HashMap::new())),
+            });
+
+            app.manage(AppsCacheState {
+                apps: Mutex::new(Vec::new()),
+                last_updated: Mutex::new(Instant::now() - Duration::from_secs(60)),
             });
 
             // Initialize SQLite database for notes

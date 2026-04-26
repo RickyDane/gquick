@@ -8,8 +8,6 @@ interface AppInfo {
   icon?: string;
 }
 
-let appsCache: AppInfo[] = [];
-
 export const appLauncherPlugin: GQuickPlugin = {
   metadata: {
     id: "app-launcher",
@@ -18,12 +16,10 @@ export const appLauncherPlugin: GQuickPlugin = {
     keywords: ["open", "launch", "app"],
   },
   getItems: async (query: string): Promise<SearchResultItem[]> => {
-    if (appsCache.length === 0) {
-      appsCache = await invoke<AppInfo[]>("list_apps");
-    }
+    const apps = await invoke<AppInfo[]>("list_apps");
 
     const queryLower = query.toLowerCase();
-    const filtered = appsCache.filter((app) =>
+    const filtered = apps.filter((app) =>
       app.name.toLowerCase().includes(queryLower)
     );
 

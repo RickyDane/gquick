@@ -12,17 +12,21 @@ import { MarkdownMessage } from "./components/MarkdownMessage";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
+import SearchSuggestions from "./components/SearchSuggestions";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
 import { performAiOcr } from "./utils/aiOcr";
-import { streamOpenAITools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
-import { getAllTools, executeTool, convertToolsForProvider, convertMessagesToOpenAI, convertMessagesToGemini, convertMessagesToAnthropic } from "./utils/toolManager";
+import { streamOpenAITools, streamOpenAIResponsesTools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
+import { getAllTools, executeTool, convertToolsForProvider, convertToolsForOpenAIResponses, convertMessagesToOpenAI, convertMessagesToOpenAIResponsesInput, convertMessagesToGemini, convertMessagesToAnthropic } from "./utils/toolManager";
 import { ToolCall } from "./plugins/types";
+import { recordUsage, getRecentItems } from "./utils/usageTracker";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
 const LEFT_KEY_LOCATION = 1;
 const LAUNCHER_WINDOW_SIZE = { width: 760, height: 800 };
 const DOCKER_WINDOW_SIZE = { width: 1200, height: 860 };
+const LAUNCHER_MIN_WINDOW_HEIGHT = 140;
+const WINDOW_RESIZE_DEBOUNCE_MS = 80;
 
 function isLeftShiftKeyEvent(e: KeyboardEvent): boolean {
   return e.key === "Shift" && (e.code === "ShiftLeft" || e.location === LEFT_KEY_LOCATION);
@@ -66,6 +70,20 @@ function isSmartSearchQuery(query: string): boolean {
   ];
   const lower = query.toLowerCase();
   return SMART_SEARCH_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+function supportsOpenAIHostedWebSearch(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  // OpenAI rejects hosted web_search for unsupported Responses models.
+  // Keep plugin function tools available, but only send hosted search to known-capable families.
+  return [
+    "gpt-4o-search-preview",
+    "gpt-4o-mini-search-preview",
+    "gpt-4o",
+    "gpt-4.1",
+    "o3",
+    "o4-mini",
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 interface ChatImage {
@@ -202,13 +220,34 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [view, setView] = useState<"search" | "chat" | "settings" | "actions" | "notes" | "docker">("search");
   const [activeActionIndex, setActiveActionIndex] = useState(0);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [items, setItems] = useState<SearchResultItem[]>([]);
+
+  const trackAndSelect = useCallback((item: SearchResultItem, currentQuery: string) => {
+    if (item.pluginId !== "terminal-command") {
+      recordUsage({
+        id: item.id,
+        pluginId: item.pluginId,
+        title: item.title,
+        subtitle: item.subtitle,
+        icon: typeof item.icon === "string" ? item.icon : undefined,
+        query: currentQuery,
+      });
+    }
+    item.onSelect();
+  }, []);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const actionsScrollRef = useRef<HTMLDivElement>(null);
   const isLeftShiftPressedRef = useRef(false);
   const itemsRef = useRef<SearchResultItem[]>([]);
   const activeIndexRef = useRef(0);
   const searchListRef = useRef<HTMLDivElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const launcherFrameRef = useRef<HTMLDivElement>(null);
+  const launcherResizeTimerRef = useRef<number | null>(null);
+  const pendingLauncherHeightRef = useRef<number | null>(null);
+  const appliedLauncherHeightRef = useRef(LAUNCHER_WINDOW_SIZE.height);
 
   // Chat State
   const [messages, setMessages] = useState<Message[]>([
@@ -253,10 +292,25 @@ function App() {
   }, [activeIndex]);
 
   useEffect(() => {
+    if (view === "search" && !query) {
+      setActiveSuggestionIndex(0);
+    }
+  }, [view, query]);
+
+  useEffect(() => {
     if (view === "search" && query && items.length > 0) {
       searchListRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [items, view, query]);
+
+  useEffect(() => {
+    if (view !== "search" || query) return;
+    const container = suggestionsRef.current;
+    if (!container) return;
+    const activeEl = container.querySelector('[data-suggestion-active="true"]') as HTMLElement;
+    if (!activeEl) return;
+    activeEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeSuggestionIndex, view, query]);
 
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
@@ -393,7 +447,10 @@ function App() {
       const size = mode === "docker" ? DOCKER_WINDOW_SIZE : LAUNCHER_WINDOW_SIZE;
       const appWindow = getCurrentWindow();
       try {
-        await appWindow.setSize(new LogicalSize(size.width, size.height));
+        const launcherHeight = mode === "launcher"
+          ? appliedLauncherHeightRef.current
+          : size.height;
+        await appWindow.setSize(new LogicalSize(size.width, launcherHeight));
         await appWindow.center();
       } catch (error) {
         console.error("Failed to resize window:", error);
@@ -408,6 +465,76 @@ function App() {
     root?.classList.toggle("gquick-docker-root", view === "docker");
     return () => root?.classList.remove("gquick-docker-root");
   }, [view]);
+
+  const scheduleLauncherResize = useCallback((nextHeight: number) => {
+    const clampedHeight = Math.max(
+      LAUNCHER_MIN_WINDOW_HEIGHT,
+      Math.min(LAUNCHER_WINDOW_SIZE.height, Math.ceil(nextHeight))
+    );
+
+    pendingLauncherHeightRef.current = clampedHeight;
+
+    if (launcherResizeTimerRef.current !== null) {
+      window.clearTimeout(launcherResizeTimerRef.current);
+    }
+
+    launcherResizeTimerRef.current = window.setTimeout(async () => {
+      launcherResizeTimerRef.current = null;
+
+      if (appliedWindowModeRef.current !== "launcher") return;
+
+      const targetHeight = pendingLauncherHeightRef.current;
+      if (targetHeight == null) return;
+      if (targetHeight === appliedLauncherHeightRef.current) return;
+
+      try {
+        await getCurrentWindow().setSize(new LogicalSize(LAUNCHER_WINDOW_SIZE.width, targetHeight));
+        appliedLauncherHeightRef.current = targetHeight;
+      } catch (error) {
+        console.error("Failed to resize launcher window:", error);
+      }
+    }, WINDOW_RESIZE_DEBOUNCE_MS);
+  }, []);
+
+  useEffect(() => {
+    if (view === "docker") {
+      if (launcherResizeTimerRef.current !== null) {
+        window.clearTimeout(launcherResizeTimerRef.current);
+        launcherResizeTimerRef.current = null;
+      }
+      pendingLauncherHeightRef.current = null;
+      return;
+    }
+
+    const frame = launcherFrameRef.current;
+    if (!frame) return;
+
+    const measureAndResize = () => {
+      const naturalHeight = Math.max(frame.scrollHeight, frame.getBoundingClientRect().height);
+      scheduleLauncherResize(naturalHeight);
+    };
+
+    measureAndResize();
+
+    const observer = new ResizeObserver(() => {
+      measureAndResize();
+    });
+
+    observer.observe(frame);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [scheduleLauncherResize, view]);
+
+  useEffect(() => {
+    return () => {
+      if (launcherResizeTimerRef.current !== null) {
+        window.clearTimeout(launcherResizeTimerRef.current);
+        launcherResizeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Reset to idle search state when window is hidden
   useEffect(() => {
@@ -489,6 +616,26 @@ function App() {
 
     setupListener();
     focusInput(); // Also focus on initial mount
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+
+    const setupListener = async () => {
+      const cleanup = await listen("open-settings", () => {
+        setView("settings");
+      });
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    };
+
+    setupListener();
 
     return () => {
       disposed = true;
@@ -728,6 +875,8 @@ function App() {
         isLeftShiftPressedRef.current = true;
       }
 
+      if (e.defaultPrevented) return;
+
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setView(prev => prev === "actions" ? "search" : "actions");
@@ -839,51 +988,32 @@ function App() {
     const quick = isQuickTranslateQuery(query);
     const terminalCommand = getTerminalCommand(query);
 
-    if (terminalCommand !== null) {
+    if (quick.isQuick) {
       searchRequestIdRef.current += 1;
-      setIsTranslating(false);
-      setIsSearching(false);
-      setSearchStatus(null);
-
-      if (terminalCommand.length === 0) {
-        setItems([{
-          id: "terminal-empty",
-          pluginId: "terminal-command",
-          title: "Run terminal command",
-          subtitle: "Type a command after >",
-          icon: Terminal,
-          score: 100,
-          onSelect: () => {},
-        }]);
-        return;
-      }
-
-      setItems([{
-        id: "terminal-run",
-        pluginId: "terminal-command",
-        title: terminalCommand,
-        subtitle: isLikelyInteractiveCommand(terminalCommand)
-          ? "Interactive command: Enter opens Terminal • inline disabled"
-          : inlineCommand?.status === "running"
-            ? `Inline command already running: ${inlineCommand.command}`
-            : "Enter: open in terminal • Left Shift + Enter: run inline",
-        icon: Terminal,
-        score: 100,
-        onSelect: () => void runExternalTerminalCommand(terminalCommand),
-      }]);
-      return;
-    }
-
-    if (quick.isQuick && quick.text.length > 0) {
-      // Handle quick translate directly with loading state
-      // Use 400ms debounce for API calls to reduce unnecessary requests
-      setIsTranslating(true);
       setIsSearching(false);
       setSearchStatus(null);
       setItems([]);
 
+      if (quick.text.length === 0) {
+        setIsTranslating(false);
+        return;
+      }
+
+      // Handle quick translate directly with loading state
+      // Use 500ms debounce for API calls to reduce unnecessary requests
+      const requestId = searchRequestIdRef.current;
+      setIsTranslating(true);
+
       const doTranslate = async () => {
-        const result = await performQuickTranslate(quick.text);
+        const latestQuick = isQuickTranslateQuery(latestSearchQueryRef.current);
+        if (latestSearchViewRef.current !== "search" || !latestQuick.isQuick || latestQuick.text.length === 0) {
+          setIsTranslating(false);
+          return;
+        }
+
+        const result = await performQuickTranslate(latestQuick.text);
+        if (requestId !== searchRequestIdRef.current) return;
+
         setIsTranslating(false);
 
         if (result.error) {
@@ -917,8 +1047,44 @@ function App() {
         }]);
       };
 
-      const timer = setTimeout(doTranslate, 400);
+      const timer = setTimeout(doTranslate, 500);
       return () => clearTimeout(timer);
+    }
+
+    setIsTranslating(false);
+
+    if (terminalCommand !== null) {
+      searchRequestIdRef.current += 1;
+      setIsSearching(false);
+      setSearchStatus(null);
+
+      if (terminalCommand.length === 0) {
+        setItems([{
+          id: "terminal-empty",
+          pluginId: "terminal-command",
+          title: "Run terminal command",
+          subtitle: "Type a command after >",
+          icon: Terminal,
+          score: 100,
+          onSelect: () => {},
+        }]);
+        return;
+      }
+
+      setItems([{
+        id: "terminal-run",
+        pluginId: "terminal-command",
+        title: terminalCommand,
+        subtitle: isLikelyInteractiveCommand(terminalCommand)
+          ? "Interactive command: Enter opens Terminal • inline disabled"
+          : inlineCommand?.status === "running"
+            ? `Inline command already running: ${inlineCommand.command}`
+            : "Enter: open in terminal • Left Shift + Enter: run inline",
+        icon: Terminal,
+        score: 100,
+        onSelect: () => void runExternalTerminalCommand(terminalCommand),
+      }]);
+      return;
     }
 
     // Application launcher and lightweight plugins use raw input immediately.
@@ -1039,6 +1205,33 @@ function App() {
 
   const totalItems = items.length;
 
+  const handleSelectQuery = useCallback((q: string) => {
+    setQuery(q);
+    inputRef.current?.focus();
+  }, []);
+
+  const handleOpenView = useCallback((v: "chat" | "notes" | "docker" | "settings" | "actions") => {
+    if (v === "notes") setInitialNoteId(null);
+    if (v === "docker") setDockerInitialImage(null);
+    setView(v);
+  }, []);
+
+  const handleOpenApp = useCallback(async (path: string) => {
+    try {
+      await invoke("open_app", { path });
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  const handleOpenFile = useCallback(async (path: string) => {
+    try {
+      await invoke("open_file", { path });
+    } catch (e) {
+      console.error("Failed to open file:", e);
+    }
+  }, []);
+
   const appActions = [
     { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} L⇧ C`, onClick: () => setView("chat") },
     { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => { setInitialNoteId(null); setView("notes"); } },
@@ -1056,6 +1249,38 @@ function App() {
   }));
 
   const totalActionItems = appActions.length + pluginActions.length;
+
+  // Suggestion items for keyboard navigation
+  const recentSuggestions = getRecentItems(8);
+  const suggestionQuickActions = [
+    { id: "chat", view: "chat" as const },
+    { id: "notes", view: "notes" as const },
+    { id: "docker", view: "docker" as const },
+    { id: "settings", view: "settings" as const },
+    { id: "actions", view: "actions" as const },
+  ];
+  const suggestionPlugins = plugins;
+  const totalSuggestions = recentSuggestions.length + suggestionQuickActions.length + suggestionPlugins.length;
+
+  const activateSuggestion = useCallback((index: number) => {
+    if (index < recentSuggestions.length) {
+      const entry = recentSuggestions[index];
+      if (entry.pluginId === "app-launcher") {
+        void handleOpenApp(entry.id);
+      } else if (entry.pluginId === "file-search") {
+        void handleOpenFile(entry.id);
+      } else {
+        handleSelectQuery(entry.query);
+      }
+    } else if (index < recentSuggestions.length + suggestionQuickActions.length) {
+      const action = suggestionQuickActions[index - recentSuggestions.length];
+      handleOpenView(action.view);
+    } else {
+      const plugin = suggestionPlugins[index - recentSuggestions.length - suggestionQuickActions.length];
+      const keyword = plugin.metadata.keywords[0] || "";
+      handleSelectQuery(keyword ? keyword + " " : "");
+    }
+  }, [recentSuggestions, handleOpenApp, handleOpenFile, handleSelectQuery, handleOpenView]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (view === "actions") {
@@ -1086,13 +1311,28 @@ function App() {
       return;
     }
 
+    const isSuggestionsVisible = view === "search" && !query && totalSuggestions > 0;
+
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActiveIndex(prev => Math.min(prev + 1, totalItems - 1));
+      if (isSuggestionsVisible) {
+        setActiveSuggestionIndex(prev => Math.min(prev + 1, totalSuggestions - 1));
+      } else {
+        setActiveIndex(prev => Math.min(prev + 1, totalItems - 1));
+      }
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActiveIndex(prev => Math.max(prev - 1, 0));
+      if (isSuggestionsVisible) {
+        setActiveSuggestionIndex(prev => Math.max(prev - 1, 0));
+      } else {
+        setActiveIndex(prev => Math.max(prev - 1, 0));
+      }
     } else if (e.key === "Enter") {
+      if (isSuggestionsVisible) {
+        e.preventDefault();
+        activateSuggestion(activeSuggestionIndex);
+        return;
+      }
       const terminalCommand = getTerminalCommand(query);
       if (terminalCommand !== null && terminalCommand.length > 0 && isLeftShiftPressedRef.current) {
         e.preventDefault();
@@ -1106,7 +1346,7 @@ function App() {
       }
       if (totalItems > 0 && items[activeIndex]) {
         e.preventDefault();
-        items[activeIndex].onSelect();
+        trackAndSelect(items[activeIndex], query);
       }
     }
   };
@@ -1175,7 +1415,7 @@ function App() {
     }
 
     const tools = getAllTools();
-    const providerTools = tools.length > 0 ? convertToolsForProvider(tools, provider as "openai" | "google" | "anthropic") : undefined;
+    const providerTools = tools.length > 0 ? convertToolsForProvider(tools, provider as "openai" | "kimi" | "google" | "anthropic") : undefined;
 
     const baseSystemContent = "You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, and network queries. Use them when helpful. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate.";
     const systemContent = notesContextStr
@@ -1206,7 +1446,9 @@ function App() {
       );
 
       let apiMessages: any[] = [];
-      if (provider === "openai" || provider === "kimi") {
+      if (provider === "openai") {
+        apiMessages = convertMessagesToOpenAIResponsesInput(processedHistory);
+      } else if (provider === "kimi") {
         apiMessages = [
           { role: "system", content: systemContent },
           ...convertMessagesToOpenAI(processedHistory)
@@ -1260,8 +1502,32 @@ function App() {
       };
 
       try {
-        if (provider === "openai" || provider === "kimi") {
-          const baseUrl = provider === "kimi" ? "https://api.moonshot.ai" : "https://api.openai.com";
+        if (provider === "openai") {
+          const responseTools = [
+            ...(supportsOpenAIHostedWebSearch(model) ? [{ type: "web_search_preview" }] : []),
+            ...convertToolsForOpenAIResponses(tools),
+          ];
+          const body: any = {
+            model: model,
+            instructions: systemContent,
+            input: apiMessages,
+            stream: true,
+          };
+          if (responseTools.length > 0) {
+            body.tools = responseTools;
+            body.tool_choice = "auto";
+          }
+          await streamOpenAIResponsesTools(
+            "https://api.openai.com/v1/responses",
+            {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`
+            },
+            body,
+            callbacks
+          );
+        } else if (provider === "kimi") {
+          const baseUrl = "https://api.moonshot.ai";
           const body: any = {
             model: model,
             messages: apiMessages,
@@ -1327,12 +1593,15 @@ function App() {
   }, [chatInput, isLoading, messages, attachedImages, isNoteRelatedQuery, fetchNotesContext]);
 
   return (
-    <div className={cn(
-      "flex max-h-[calc(100vh-24px)] max-w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 ring-1 ring-white/10 backdrop-blur-3xl transition-all duration-200 relative",
+    <div
+      ref={launcherFrameRef}
+      className={cn(
+      "flex max-w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 ring-1 ring-white/10 backdrop-blur-3xl transition-all duration-200 relative",
       view === "docker"
-        ? "h-[calc(100vh-24px)] w-300 shadow-none"
+        ? "h-[calc(100vh-24px)] max-h-[calc(100vh-24px)] w-300 shadow-none"
         : "w-[min(680px,calc(100vw-24px))] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)]"
-    )}>
+      )}
+    >
       <div className="flex items-center px-4 py-4 border-b border-white/5">
         {view === "settings" ? (
           <SettingsIcon className="mr-3 h-5 w-5 text-zinc-400" />
@@ -1501,295 +1770,297 @@ function App() {
         </div>
       )}
 
-      {(view !== "search" || query) && (
+      {view === "search" && !query && (localStorage.getItem("ui-layout") ?? "default") === "compact" ? null : (
         <div className={cn("min-h-[40px] flex-1 overflow-hidden", view === "docker" && "min-h-0")}>
           {view === "settings" ? (
-            <Settings onClose={() => setView("search")} />
-          ) : view === "actions" ? (
-          <div ref={actionsScrollRef} className="h-[300px] overflow-y-auto p-4"
-          >
-            <div className="space-y-2">
-              {/* App Actions */}
-              {appActions.map((action, idx) => {
-                const Icon = action.icon;
-                const isActive = activeActionIndex === idx;
-                return (
-                  <div
-                    key={action.id}
-                    data-action-active={isActive}
-                    className={cn(
-                      "flex items-center justify-between p-3 rounded-xl cursor-pointer text-zinc-200 transition-colors",
-                      isActive ? "bg-white/10" : "hover:bg-white/10"
-                    )}
-                    onClick={action.onClick}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : action.id === "docker" ? "text-cyan-400" : "text-zinc-400")} />
-                      <span>{action.label}</span>
+              <Settings onClose={() => setView("search")} />
+            ) : view === "actions" ? (
+            <div ref={actionsScrollRef} className="h-[300px] overflow-y-auto p-4"
+            >
+              <div className="space-y-2">
+                {/* App Actions */}
+                {appActions.map((action, idx) => {
+                  const Icon = action.icon;
+                  const isActive = activeActionIndex === idx;
+                  return (
+                    <div
+                      key={action.id}
+                      data-action-active={isActive}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-xl cursor-pointer text-zinc-200 transition-colors",
+                        isActive ? "bg-white/10" : "hover:bg-white/10"
+                      )}
+                      onClick={action.onClick}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : action.id === "docker" ? "text-cyan-400" : "text-zinc-400")} />
+                        <span>{action.label}</span>
+                      </div>
+                      <span className="text-xs text-zinc-500">{action.shortcut}</span>
                     </div>
-                    <span className="text-xs text-zinc-500">{action.shortcut}</span>
-                  </div>
-                );
-              })}
+                  );
+                })}
 
-              {/* Plugins Section */}
-              <div className="pt-4 mt-2 border-t border-white/10">
-                <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2 px-1">Plugins</h4>
-                <div className="space-y-1">
-                  {pluginActions.map((plugin, idx) => {
-                    const Icon = plugin.icon;
-                    const actionIdx = appActions.length + idx;
-                    const isActive = activeActionIndex === actionIdx;
-                    return (
-                      <div
-                        key={plugin.id}
-                        data-action-active={isActive}
-                        className={cn(
-                          "flex items-center gap-3 p-3 rounded-xl cursor-pointer text-zinc-200 transition-colors",
-                          isActive ? "bg-white/10" : "hover:bg-white/10"
-                        )}
-                        onClick={() => {
-                          const keyword = plugin.keywords[0] || plugin.label.toLowerCase();
-                          setView("search");
-                          setQuery(keyword + " ");
-                          inputRef.current?.focus();
-                        }}
-                      >
-                        <Icon className="h-5 w-5 text-zinc-400 shrink-0" />
-                        <div className="flex flex-col min-w-0 flex-1">
-                          <span className="text-sm truncate">{plugin.label}</span>
-                          {plugin.subtitle && <span className="text-[11px] text-zinc-500 truncate">{plugin.subtitle}</span>}
+                {/* Plugins Section */}
+                <div className="pt-4 mt-2 border-t border-white/10">
+                  <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2 px-1">Plugins</h4>
+                  <div className="space-y-1">
+                    {pluginActions.map((plugin, idx) => {
+                      const Icon = plugin.icon;
+                      const actionIdx = appActions.length + idx;
+                      const isActive = activeActionIndex === actionIdx;
+                      return (
+                        <div
+                          key={plugin.id}
+                          data-action-active={isActive}
+                          className={cn(
+                            "flex items-center gap-3 p-3 rounded-xl cursor-pointer text-zinc-200 transition-colors",
+                            isActive ? "bg-white/10" : "hover:bg-white/10"
+                          )}
+                          onClick={() => {
+                            const keyword = plugin.keywords[0] || plugin.label.toLowerCase();
+                            setView("search");
+                            setQuery(keyword + " ");
+                            inputRef.current?.focus();
+                          }}
+                        >
+                          <Icon className="h-5 w-5 text-zinc-400 shrink-0" />
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="text-sm truncate">{plugin.label}</span>
+                            {plugin.subtitle && <span className="text-[11px] text-zinc-500 truncate">{plugin.subtitle}</span>}
+                          </div>
+                          <span className="text-xs text-zinc-600 font-mono shrink-0">{plugin.keywords.slice(0, 2).join(", ")}</span>
                         </div>
-                        <span className="text-xs text-zinc-600 font-mono shrink-0">{plugin.keywords.slice(0, 2).join(", ")}</span>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : view === "notes" ? (
+            <NotesView initialNoteId={initialNoteId ?? undefined} searchQuery={notesSearchQuery} />
+          ) : view === "docker" ? (
+            <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
+          ) : view === "chat" ? (
+            <div className="flex flex-col h-[300px]">
+              <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
+                {notesContext && (
+                  <div className="flex flex-col gap-1.5 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/10">
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-400 font-medium">
+                      <StickyNote className="h-3 w-3" />
+                      <span>Notes used as context</span>
+                    </div>
+                    <div className="space-y-1">
+                      {notesContext.map((note, idx) => (
+                        <div key={idx} className="text-[11px] text-zinc-400 truncate">
+                          <span className="text-zinc-300 font-medium">{note.title}:</span> {note.content.substring(0, 100)}{note.content.length > 100 ? "..." : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {messages.filter(msg => msg.role !== "tool").map(msg => (
+                  <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
+                    <div className={cn(
+                      "h-8 w-8 rounded-full flex items-center justify-center shrink-0 border",
+                      msg.role === "assistant" ? "bg-blue-500/20 border-blue-500/30 text-blue-400" : "bg-zinc-800 border-white/10 text-zinc-400"
+                    )}>
+                      {msg.role === "assistant" ? "G" : <User className="h-4 w-4" />}
+                    </div>
+                    <div className={cn(
+                      "rounded-2xl px-4 py-2 text-sm max-w-[85%] border break-words overflow-hidden",
+                      msg.role === "assistant" ? "bg-white/5 text-zinc-200 border-white/5" : "bg-blue-600/10 text-blue-100 border-blue-500/20"
+                    )}>
+                      {msg.role === "assistant" ? (
+                        msg.content ? (
+                          <MarkdownMessage content={msg.content} />
+                        ) : (
+                          <div className="flex items-center gap-2 text-zinc-400">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>Thinking...</span>
+                          </div>
+                        )
+                      ) : (
+                        msg.content && <p>{msg.content}</p>
+                      )}
+                      {msg.images && msg.images.length > 0 && (
+                        <div className={cn("grid gap-2 mt-2", msg.images.length === 1 ? "grid-cols-1" : "grid-cols-2")}>
+                          {msg.images.map((img, idx) => (
+                            <img
+                              key={idx}
+                              src={img.dataUrl}
+                              alt={`Attached image ${idx + 1}`}
+                              className={cn(
+                                "rounded-lg border object-cover",
+                                msg.images?.length === 1 ? "max-w-[280px] max-h-[200px]" : "max-h-[130px]",
+                                msg.role === "assistant" ? "border-white/10" : "border-blue-500/20"
+                              )}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+                {showScrollButton && (
+                  <button
+                    onClick={scrollToBottom}
+                    className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-blue-500/20 border border-blue-500/30 text-blue-400 hover:bg-blue-500/30 rounded-full p-1.5 backdrop-blur transition-colors cursor-pointer z-10"
+                    aria-label="Scroll to bottom"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : query ? (
+            <div ref={searchListRef} className="max-h-[500px] overflow-y-auto p-2">
+              {isTranslating && (
+                <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Translating...
+                </div>
+              )}
+              {inlineCommand && getTerminalCommand(query) !== null && (
+                <div className="mb-2 rounded-xl border border-white/10 bg-zinc-950/70 overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 border-b border-white/5 px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {inlineCommand.status === "running" ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                      ) : (
+                        <Terminal className="h-4 w-4 text-emerald-400" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-zinc-200">{inlineCommand.command}</div>
+                        <div className="text-[10px] text-zinc-500">
+                          {inlineCommand.status === "running"
+                            ? "Running inline..."
+                            : inlineCommand.status === "canceled"
+                              ? "Canceled"
+                              : inlineCommand.status === "blocked"
+                                ? "Needs interactive terminal"
+                                : inlineCommand.status === "failed"
+                                  ? "Failed"
+                                  : `Exited with code ${inlineCommand.exitCode ?? "unknown"}`}
+                        </div>
+                      </div>
+                    </div>
+                    {inlineCommand.status === "running" && (
+                      <button
+                        onClick={() => void cancelInlineCommand()}
+                        className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    {inlineCommand.status === "blocked" && (
+                      <button
+                        onClick={() => void runExternalTerminalCommand(inlineCommand.command)}
+                        className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
+                      >
+                        Open Terminal
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed">
+                    {inlineCommand.error && <pre className={cn("whitespace-pre-wrap break-words", inlineCommand.status === "blocked" ? "text-amber-300" : "text-red-300")}>{inlineCommand.error}</pre>}
+                    {inlineCommand.stdout && (
+                      <pre className="whitespace-pre-wrap break-words text-zinc-200">{inlineCommand.stdout}</pre>
+                    )}
+                    {inlineCommand.stderr && (
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-amber-300">{inlineCommand.stderr}</pre>
+                    )}
+                    {!inlineCommand.error && !inlineCommand.stdout && !inlineCommand.stderr && (
+                      <div className="text-zinc-500">{inlineCommand.status === "running" ? "Waiting for output..." : "No output"}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {items.length > 0 ? (
+                <div className="space-y-0.5">
+                  {items.map((item, idx) => {
+                    const Icon = item.icon;
+                    const isActive = activeIndex === idx;
+                    return (
+                      <div key={item.id}>
+                        <div
+                          ref={(el) => {
+                            if (isActive && el) {
+                              el.scrollIntoView({
+                                block: "nearest",
+                                behavior: "smooth"
+                              });
+                            }
+                          }}
+                          className={cn(
+                            "group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-75",
+                            isActive ? "bg-white/10 ring-1 ring-white/10 shadow-lg" : "hover:bg-white/5"
+                          )}
+                          onClick={() => trackAndSelect(item, query)}
+                        >
+                          <div className={cn(
+                            "flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
+                            isActive ? "bg-zinc-800 border-white/20 text-white" : "bg-zinc-900 border-white/5 text-zinc-400"
+                          )}>
+                            {typeof Icon === 'string' ? (
+                              Icon.match(/^(\/|https?:\/\/|asset:\/\/|data:)/) ? (
+                                <img src={Icon} alt="" className="h-8 w-8 object-contain" />
+                              ) : (
+                                Icon
+                              )
+                            ) : React.isValidElement(Icon) ? (
+                              Icon
+                            ) : (
+                              // @ts-ignore - Icon is a LucideIcon component
+                              <Icon className="h-6 w-6" />
+                            )}
+                          </div>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="text-[14px] font-medium text-zinc-100 truncate">{item.titleNode ?? item.title}</span>
+                            {(item.subtitleNode ?? item.subtitle) && <span className="text-[11px] text-zinc-500 truncate">{item.subtitleNode ?? item.subtitle}</span>}
+                          </div>
+                          <div className={cn(
+                            "flex items-center transition-opacity duration-200 gap-2",
+                            isActive ? "opacity-100" : "opacity-0"
+                          )}>
+                            {item.pluginId === "file-search" && isSmartSearchQuery(query) && (
+                              <span className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/30 text-[10px] text-purple-400 font-medium">
+                                Smart
+                              </span>
+                            )}
+                            <ChevronRight className="h-4 w-4 text-zinc-600" />
+                          </div>
+                        </div>
+                        {isActive && item.renderPreview && (
+                          <div className="mx-2 mb-2 rounded-xl border border-white/5 bg-zinc-950/50 overflow-hidden">
+                            {item.renderPreview()}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            </div>
-          </div>
-        ) : view === "notes" ? (
-          <NotesView initialNoteId={initialNoteId ?? undefined} searchQuery={notesSearchQuery} />
-        ) : view === "docker" ? (
-          <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
-        ) : view === "chat" ? (
-          <div className="flex flex-col h-[300px]">
-            <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
-              {notesContext && (
-                <div className="flex flex-col gap-1.5 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/10">
-                  <div className="flex items-center gap-1.5 text-[11px] text-amber-400 font-medium">
-                    <StickyNote className="h-3 w-3" />
-                    <span>Notes used as context</span>
-                  </div>
-                  <div className="space-y-1">
-                    {notesContext.map((note, idx) => (
-                      <div key={idx} className="text-[11px] text-zinc-400 truncate">
-                        <span className="text-zinc-300 font-medium">{note.title}:</span> {note.content.substring(0, 100)}{note.content.length > 100 ? "..." : ""}
-                      </div>
-                    ))}
-                  </div>
+              ) : isSearching || isTranslating ? (
+                <div className="p-6 text-center">
+                  <p className="text-sm text-zinc-500 italic font-medium">Waiting for results…</p>
+                </div>
+              ) : (
+                <div className="p-6 text-center">
+                  <p className="text-sm text-zinc-400 italic font-medium">No results found for "{query}"</p>
                 </div>
               )}
-              {messages.filter(msg => msg.role !== "tool").map(msg => (
-                <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
-                  <div className={cn(
-                    "h-8 w-8 rounded-full flex items-center justify-center shrink-0 border",
-                    msg.role === "assistant" ? "bg-blue-500/20 border-blue-500/30 text-blue-400" : "bg-zinc-800 border-white/10 text-zinc-400"
-                  )}>
-                    {msg.role === "assistant" ? "G" : <User className="h-4 w-4" />}
-                  </div>
-                  <div className={cn(
-                    "rounded-2xl px-4 py-2 text-sm max-w-[85%] border break-words overflow-hidden",
-                    msg.role === "assistant" ? "bg-white/5 text-zinc-200 border-white/5" : "bg-blue-600/10 text-blue-100 border-blue-500/20"
-                  )}>
-                    {msg.role === "assistant" ? (
-                      msg.content ? (
-                        <MarkdownMessage content={msg.content} />
-                      ) : (
-                        <div className="flex items-center gap-2 text-zinc-400">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          <span>Thinking...</span>
-                        </div>
-                      )
-                    ) : (
-                      msg.content && <p>{msg.content}</p>
-                    )}
-                    {msg.images && msg.images.length > 0 && (
-                      <div className={cn("grid gap-2 mt-2", msg.images.length === 1 ? "grid-cols-1" : "grid-cols-2")}>
-                        {msg.images.map((img, idx) => (
-                          <img
-                            key={idx}
-                            src={img.dataUrl}
-                            alt={`Attached image ${idx + 1}`}
-                            className={cn(
-                              "rounded-lg border object-cover",
-                              msg.images?.length === 1 ? "max-w-[280px] max-h-[200px]" : "max-h-[130px]",
-                              msg.role === "assistant" ? "border-white/10" : "border-blue-500/20"
-                            )}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
+              {isSearching && searchStatus && (
+                <div className="mt-2 flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {searchStatus}
                 </div>
-              ))}
-              <div ref={chatEndRef} />
-              {showScrollButton && (
-                <button
-                  onClick={scrollToBottom}
-                  className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-blue-500/20 border border-blue-500/30 text-blue-400 hover:bg-blue-500/30 rounded-full p-1.5 backdrop-blur transition-colors cursor-pointer z-10"
-                  aria-label="Scroll to bottom"
-                >
-                  <ChevronDown className="h-4 w-4" />
-                </button>
               )}
             </div>
-          </div>
-        ) : query ? (
-          <div ref={searchListRef} className="max-h-[500px] overflow-y-auto p-2">
-            {isTranslating && (
-              <div className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 mb-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Translating...
-              </div>
-            )}
-            {inlineCommand && getTerminalCommand(query) !== null && (
-              <div className="mb-2 rounded-xl border border-white/10 bg-zinc-950/70 overflow-hidden">
-                <div className="flex items-center justify-between gap-3 border-b border-white/5 px-3 py-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    {inlineCommand.status === "running" ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
-                    ) : (
-                      <Terminal className="h-4 w-4 text-emerald-400" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-zinc-200">{inlineCommand.command}</div>
-                      <div className="text-[10px] text-zinc-500">
-                        {inlineCommand.status === "running"
-                          ? "Running inline..."
-                          : inlineCommand.status === "canceled"
-                            ? "Canceled"
-                            : inlineCommand.status === "blocked"
-                              ? "Needs interactive terminal"
-                              : inlineCommand.status === "failed"
-                                ? "Failed"
-                                : `Exited with code ${inlineCommand.exitCode ?? "unknown"}`}
-                      </div>
-                    </div>
-                  </div>
-                  {inlineCommand.status === "running" && (
-                    <button
-                      onClick={() => void cancelInlineCommand()}
-                      className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                  {inlineCommand.status === "blocked" && (
-                    <button
-                      onClick={() => void runExternalTerminalCommand(inlineCommand.command)}
-                      className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
-                    >
-                      Open Terminal
-                    </button>
-                  )}
-                </div>
-                <div className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed">
-                  {inlineCommand.error && <pre className={cn("whitespace-pre-wrap break-words", inlineCommand.status === "blocked" ? "text-amber-300" : "text-red-300")}>{inlineCommand.error}</pre>}
-                  {inlineCommand.stdout && (
-                    <pre className="whitespace-pre-wrap break-words text-zinc-200">{inlineCommand.stdout}</pre>
-                  )}
-                  {inlineCommand.stderr && (
-                    <pre className="mt-2 whitespace-pre-wrap break-words text-amber-300">{inlineCommand.stderr}</pre>
-                  )}
-                  {!inlineCommand.error && !inlineCommand.stdout && !inlineCommand.stderr && (
-                    <div className="text-zinc-500">{inlineCommand.status === "running" ? "Waiting for output..." : "No output"}</div>
-                  )}
-                </div>
-              </div>
-            )}
-            {items.length > 0 ? (
-              <div className="space-y-0.5">
-                {items.map((item, idx) => {
-                  const Icon = item.icon;
-                  const isActive = activeIndex === idx;
-                  return (
-                    <div key={item.id}>
-                      <div
-                        ref={(el) => {
-                          if (isActive && el) {
-                            el.scrollIntoView({
-                              block: "nearest",
-                              behavior: "smooth"
-                            });
-                          }
-                        }}
-                        className={cn(
-                          "group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-75",
-                          isActive ? "bg-white/10 ring-1 ring-white/10 shadow-lg" : "hover:bg-white/5"
-                        )}
-                        onClick={item.onSelect}
-                      >
-                        <div className={cn(
-                          "flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
-                          isActive ? "bg-zinc-800 border-white/20 text-white" : "bg-zinc-900 border-white/5 text-zinc-400"
-                        )}>
-                          {typeof Icon === 'string' ? (
-                            Icon.match(/^(\/|https?:\/\/|asset:\/\/|data:)/) ? (
-                              <img src={Icon} alt="" className="h-8 w-8 object-contain" />
-                            ) : (
-                              Icon
-                            )
-                          ) : React.isValidElement(Icon) ? (
-                            Icon
-                          ) : (
-                            // @ts-ignore - Icon is a LucideIcon component
-                            <Icon className="h-6 w-6" />
-                          )}
-                        </div>
-                        <div className="flex flex-col flex-1 min-w-0">
-                          <span className="text-[14px] font-medium text-zinc-100 truncate">{item.title}</span>
-                          {item.subtitle && <span className="text-[11px] text-zinc-500 truncate">{item.subtitle}</span>}
-                        </div>
-                        <div className={cn(
-                          "flex items-center transition-opacity duration-200 gap-2",
-                          isActive ? "opacity-100" : "opacity-0"
-                        )}>
-                          {item.pluginId === "file-search" && isSmartSearchQuery(query) && (
-                            <span className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/30 text-[10px] text-purple-400 font-medium">
-                              Smart
-                            </span>
-                          )}
-                          <ChevronRight className="h-4 w-4 text-zinc-600" />
-                        </div>
-                      </div>
-                      {isActive && item.renderPreview && (
-                        <div className="mx-2 mb-2 rounded-xl border border-white/5 bg-zinc-950/50 overflow-hidden">
-                          {item.renderPreview()}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : isSearching || isTranslating ? (
-              <div className="p-6 text-center">
-                <p className="text-sm text-zinc-500 italic font-medium">Waiting for results…</p>
-              </div>
-            ) : (
-              <div className="p-6 text-center">
-                <p className="text-sm text-zinc-400 italic font-medium">No results found for "{query}"</p>
-              </div>
-            )}
-            {isSearching && searchStatus && (
-              <div className="mt-2 flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {searchStatus}
-              </div>
-            )}
-          </div>
-        ) : null}
-      </div>
+          ) : view === "search" && !query ? (
+            <SearchSuggestions ref={suggestionsRef} activeIndex={activeSuggestionIndex} onSelectQuery={handleSelectQuery} onOpenView={handleOpenView} onOpenApp={handleOpenApp} onOpenFile={handleOpenFile} />
+          ) : null}
+        </div>
       )}
 
       <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/5 bg-zinc-950/40 px-4 py-2 text-[11px] font-medium text-zinc-500">

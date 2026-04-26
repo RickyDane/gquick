@@ -38,7 +38,7 @@ GQuick is a fully functional cross-platform desktop productivity launcher built 
 - **File index caching**: 5-minute TTL to balance freshness and performance
 
 ### Translation
-- **Quick Translate**: Type `t: text`, `tr: text`, or `> text` for instant AI translation with auto language detection (German/English)
+- **Quick Translate**: Type `t: text` or `tr: text` for instant AI translation with auto language detection (German/English)
 - **Full Translation UI**: Type `translate:` or `/translate` to open a dedicated panel with 12 languages, swap button, and copy-to-clipboard
 
 ### Docker Management

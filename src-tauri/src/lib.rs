@@ -1,7 +1,7 @@
 use base64::Engine;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     Emitter, Manager, Runtime,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -15,6 +15,11 @@ use tesseract::Tesseract;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -4004,8 +4009,21 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
             let _ = window.emit("window-hidden", ());
             restore_previous_focus(app);
         } else {
+            show_main_window(app);
+        }
+    }
+}
+
+fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let was_visible = window.is_visible().unwrap_or(false);
+
+        if !was_visible {
             record_previous_focus(app);
-            // Center window on primary monitor
+        }
+
+        // Center window on primary monitor when showing from hidden state.
+        if !was_visible {
             if let Ok(Some(monitor)) = app.primary_monitor() {
                 let monitor_size = monitor.size();
                 let monitor_pos = monitor.position();
@@ -4030,10 +4048,21 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
                 let _ =
                     window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
             }
-            let _ = window.show();
-            let _ = window.set_focus();
+        }
+
+        let _ = window.show();
+        let _ = window.set_focus();
+        if !was_visible {
             let _ = window.emit("window-shown", ());
         }
+    }
+}
+
+fn open_settings_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    show_main_window(app);
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit("open-settings", ());
     }
 }
 
@@ -4166,23 +4195,25 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            let open_i = MenuItem::with_id(app, "open", "Open GQuick", true, None::<&str>)?;
+            let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit_i])?;
+            let menu = Menu::with_items(app, &[&open_i, &settings_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        show_main_window(app);
+                    }
+                    "settings" => {
+                        open_settings_window(app);
+                    }
                     "quit" => {
                         app.exit(0);
                     }
                     _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        toggle_window(app);
-                    }
                 })
                 .build(app)?;
 
@@ -4284,6 +4315,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            quit_app,
             list_apps,
             get_network_info,
             docker_status,

@@ -23,11 +23,7 @@ html, body {
   justify-content: center;
   align-items: flex-start;
   box-sizing: border-box;
-  /* Top padding to position the app slightly above center */
-  padding-top: 10vh;
-  padding-bottom: 40px;
-  padding-left: 40px;
-  padding-right: 40px;
+  padding: 0;
 }
 
 #root.gquick-docker-root {

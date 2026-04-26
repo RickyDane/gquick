@@ -9,6 +9,75 @@ function isLikelyGerman(text: string): boolean {
   return germanCount >= 2 || (words.length <= 3 && germanCount >= 1);
 }
 
+function isLikelyEnglish(text: string): boolean {
+  const lower = text.toLowerCase();
+  const englishWords = ["the", "and", "is", "are", "to", "a", "an", "of", "in", "for", "with", "on", "at", "from", "this", "that", "hello", "hi", "thanks", "please", "yes", "no", "good", "morning", "night"];
+  const words = lower.split(/\s+/).filter(Boolean);
+  const englishCount = words.filter(w => englishWords.includes(w)).length;
+
+  return englishCount >= 2 || (words.length <= 3 && englishCount >= 1);
+}
+
+const LANGUAGE_CODE_NAMES: Record<string, string> = {
+  en: "English",
+  eng: "English",
+  english: "English",
+  de: "German",
+  deu: "German",
+  ger: "German",
+  german: "German",
+  deutsch: "German",
+};
+
+function normalizeLanguageName(language: string): string {
+  const trimmed = language.trim();
+  if (!trimmed) return "auto-detected";
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized.includes("english")) return "English";
+  if (normalized.includes("german") || normalized.includes("deutsch")) return "German";
+
+  const withoutRegion = normalized.split(/[-_]/)[0];
+  const codeName = LANGUAGE_CODE_NAMES[withoutRegion];
+  if (codeName) return codeName;
+
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+export function getAutoTargetLanguage(detectedLanguage: string): string {
+  return normalizeLanguageName(detectedLanguage).toLowerCase() === "english" ? "German" : "English";
+}
+
+function parseTranslationPayload(responseText: string): {
+  translation: string;
+  detectedLanguage: string;
+} | null {
+  const cleaned = responseText
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const jsonText = cleaned.match(/\{[\s\S]*\}/)?.[0] ?? cleaned;
+
+  try {
+    const payload = JSON.parse(jsonText) as Record<string, unknown>;
+    const translation = payload.translation ?? payload.translated_text ?? payload.result;
+    const detectedLanguage = payload.detected_language ?? payload.source_language ?? payload.source;
+
+    if (typeof translation === "string" && translation.trim()) {
+      return {
+        translation: translation.trim(),
+        detectedLanguage: typeof detectedLanguage === "string" ? normalizeLanguageName(detectedLanguage) : "auto-detected",
+      };
+    }
+  } catch {
+    // Some providers may ignore JSON mode instructions; caller falls back to raw text.
+  }
+
+  return null;
+}
+
 export interface QuickTranslateResult {
   result: string;
   detectedLang: string;
@@ -30,6 +99,10 @@ export function isQuickTranslateQuery(query: string): { isQuick: boolean; text: 
 }
 
 export async function performQuickTranslate(text: string): Promise<QuickTranslateResult> {
+  if (!text.trim()) {
+    return { result: "", detectedLang: "", targetLang: "" };
+  }
+
   const apiKey = localStorage.getItem("api-key");
   const provider = localStorage.getItem("api-provider") || "openai";
   const model = localStorage.getItem("selected-model");
@@ -38,11 +111,10 @@ export async function performQuickTranslate(text: string): Promise<QuickTranslat
     return { result: "", detectedLang: "", targetLang: "", error: "Configure API key in Settings (⌘,)" };
   }
 
-  const isGerman = isLikelyGerman(text);
-  const targetLang = isGerman ? "English" : "German";
-  const sourceHint = isGerman ? "German" : "auto-detected";
+  const fallbackDetectedLang = isLikelyGerman(text) ? "German" : isLikelyEnglish(text) ? "English" : "auto-detected";
+  const fallbackTargetLang = getAutoTargetLanguage(fallbackDetectedLang);
 
-  const prompt = `Translate this text to ${targetLang}:\n${text.trim()}\n\nReturn ONLY the translated text, no explanations.`;
+  const prompt = `Detect the source language, then translate using this rule: if the source language is English, translate to German; otherwise translate to English.\n\nText:\n${text.trim()}\n\nReturn ONLY valid JSON in this exact shape: {"detected_language":"<language name>","translation":"<translated text>"}.`;
 
   try {
     let responseText = "";
@@ -98,7 +170,14 @@ export async function performQuickTranslate(text: string): Promise<QuickTranslat
       responseText = data.content?.[0]?.text || "";
     }
 
-    return { result: responseText.trim(), detectedLang: sourceHint, targetLang };
+    const parsed = parseTranslationPayload(responseText);
+    if (parsed) {
+      const detectedLang = parsed.detectedLanguage === "auto-detected" ? fallbackDetectedLang : parsed.detectedLanguage;
+      const targetLang = getAutoTargetLanguage(detectedLang);
+      return { result: parsed.translation, detectedLang, targetLang };
+    }
+
+    return { result: responseText.trim(), detectedLang: fallbackDetectedLang, targetLang: fallbackTargetLang };
   } catch (err: any) {
     return { result: "", detectedLang: "", targetLang: "", error: err.message || "Translation failed" };
   }

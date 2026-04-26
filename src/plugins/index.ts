@@ -6,6 +6,8 @@ import { fileSearchPlugin } from "./fileSearch";
 import { translatePlugin } from "./translate";
 import { notesPlugin } from "./notes";
 import { networkInfoPlugin } from "./networkInfo";
+import { speedtestPlugin } from "./speedtest";
+import { weatherPlugin } from "./weather";
 import { GQuickPlugin, QueryPrefixMatcher } from "./types";
 
 export const plugins: GQuickPlugin[] = [
@@ -17,6 +19,8 @@ export const plugins: GQuickPlugin[] = [
   translatePlugin,
   notesPlugin,
   networkInfoPlugin,
+  speedtestPlugin,
+  weatherPlugin,
 ];
 
 export function getExplicitPluginPrefixMatch(query: string): GQuickPlugin[] | null {

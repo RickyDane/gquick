@@ -11,12 +11,21 @@ export async function executeTool(
 ): Promise<ToolResult> {
   const plugin = plugins.find((p) => p.tools?.some((t) => t.name === name));
   if (!plugin || !plugin.executeTool) {
-    return { content: "", success: false, error: `Tool "${name}" not found` };
+    const error = `Tool "${name}" not found`;
+    return { content: `Tool failed: ${error}`, success: false, error };
   }
   try {
-    return await plugin.executeTool(name, args);
+    const result = await plugin.executeTool(name, args);
+    if (!result.success && !result.content) {
+      return {
+        ...result,
+        content: `Tool "${name}" failed: ${result.error || "Unknown error"}`,
+      };
+    }
+    return result;
   } catch (err: any) {
-    return { content: "", success: false, error: err.message || String(err) };
+    const error = err.message || String(err);
+    return { content: `Tool "${name}" failed: ${error}`, success: false, error };
   }
 }
 
@@ -54,6 +63,15 @@ export function convertToolsForProvider(
   }
 
   return [];
+}
+
+export function convertToolsForOpenAIResponses(tools: PluginTool[]): any[] {
+  return tools.map((t) => ({
+    type: "function",
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
 }
 
 // ------------------------------------------------------------------
@@ -103,6 +121,47 @@ export function convertMessagesToOpenAI(messages: Message[]): any[] {
           ]
         : m.content,
     };
+  });
+}
+
+export function convertMessagesToOpenAIResponsesInput(messages: Message[]): any[] {
+  return messages.flatMap((m) => {
+    if (m.role === "tool") {
+      return [{ type: "function_call_output", call_id: m.toolCallId, output: m.content }];
+    }
+
+    const items: any[] = [];
+
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      if (m.content && m.content !== "Using tools...") {
+        items.push({
+          role: "assistant",
+          content: [{ type: "output_text", text: m.content }],
+        });
+      }
+      items.push(
+        ...m.toolCalls.map((tc) => ({
+          type: "function_call",
+          call_id: tc.id,
+          name: tc.name,
+          arguments: JSON.stringify(tc.arguments),
+        }))
+      );
+      return items;
+    }
+
+    return [{
+      role: m.role,
+      content: m.images?.length
+        ? [
+            { type: m.role === "assistant" ? "output_text" : "input_text", text: m.content },
+            ...m.images.map((img) => ({
+              type: "input_image" as const,
+              image_url: img.dataUrl,
+            })),
+          ]
+        : [{ type: m.role === "assistant" ? "output_text" : "input_text", text: m.content }],
+    }];
   });
 }
 

@@ -26,7 +26,7 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
 - **Model auto-discovery** — fetches available models from provider APIs with 24-hour cache
 
 ### Translation (Fully Implemented)
-- **Quick Translate** — type `t: text`, `tr: text`, or `> text` for instant translation (auto-detects German/English direction, 400ms debounce)
+- **Quick Translate** — type `t: text` or `tr: text` for instant translation (auto-detects German/English direction, 500ms debounce)
 - **Full Translation UI** — `translate:` or `/translate` command opens a dedicated UI with source/target language selection, swap button, and copy-to-clipboard
 
 ### Screen Capture & OCR
@@ -222,7 +222,7 @@ src-tauri/
 | Calculator | ✅ Works | Eval via `new Function()` |
 | Docker Manager | ✅ Works | Requires Docker CLI |
 | Web Search | ✅ Works | Opens browser |
-| Quick Translate | ✅ Works | `t:`, `tr:`, `>` prefixes |
+| Quick Translate | ✅ Works | `t:`, `tr:` prefixes |
 | Full Translate UI | ✅ Works | Language selection, swap, copy |
 | Screenshot Capture | ✅ Works | Saves + copies to clipboard |
 | OCR | ✅ Works | Real Tesseract, copies text |

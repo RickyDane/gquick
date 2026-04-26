@@ -61,6 +61,9 @@ export interface SearchResultItem {
   pluginId: string;
   title: string;
   subtitle?: string;
+  /** Optional live-rendered labels for items that update without a fresh search. */
+  titleNode?: React.ReactNode;
+  subtitleNode?: React.ReactNode;
   icon: LucideIcon | string | React.ReactNode;
   onSelect: () => void;
   actions?: PluginAction[];

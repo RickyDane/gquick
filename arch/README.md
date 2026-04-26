@@ -1,133 +1,77 @@
-# GQuick Architecture Overview
+# GQuick Architecture
 
-GQuick is a cross-platform desktop productivity launcher built with **Tauri 2.0** (Rust backend) and **React 19** (TypeScript frontend).
+GQuick is a Tauri v2 desktop launcher with a React 19 frontend. The app combines a Spotlight-like search UI, plugin search/actions, AI chat with provider-specific streaming and tool calling, screenshot/OCR capture, notes, Docker management, weather, speed test, network diagnostics, translation, file/app search, calculator, web search, and inline terminal execution.
 
-## System Architecture
+## System map
 
 ```mermaid
 graph TB
-    subgraph "Frontend (React 19 + TypeScript)"
-        A[App.tsx<br/>Search + Chat + Actions] --> B[Plugin System]
-        A --> C[Settings.tsx<br/>API + Shortcuts Config]
-        D[Selector.tsx<br/>Region Selection] --> E[Tauri Commands]
-        B --> F[App Launcher]
-        B --> G[Calculator]
-        B --> H[Docker Manager]
-        B --> I[Web Search]
-        B --> J[File Search]
-        B --> K[Translate]
-    end
+  User[User] --> Shortcuts[Global shortcuts / tray / launcher window]
+  Shortcuts --> Rust[Tauri Rust backend]
+  Rust --> Main[main webview: App.tsx]
+  Rust --> Selector[selector webview: Selector.tsx]
 
-    subgraph "Tauri Bridge"
-        E --> L[invoke commands]
-        M[Global Shortcuts] --> N[Shortcut Handler]
-        O[Events] --> P[listen/emit]
-    end
+  subgraph Frontend[React + TypeScript]
+    Main --> Registry[src/plugins registry]
+    Registry --> Plugins[Search plugins]
+    Main --> Chat[AI chat + images]
+    Chat --> ToolMgr[src/utils/toolManager.ts]
+    Main --> Settings[Settings.tsx]
+    Main --> NotesView[NotesView]
+    Main --> DockerView[DockerView]
+  end
 
-    subgraph "Backend (Rust)"
-        L --> Q[list_apps / open_app]
-        L --> R[capture_region]
-        L --> S[search_files / smart_search_files]
-        L --> T[Docker Commands]
-        L --> U[update_shortcut]
-        N --> V[Window Manager]
-        V --> W[System Tray]
-        R --> X[xcap crate]
-        R --> Y[image crate]
-        R --> Z[tesseract crate]
-        S --> AA[FileIndex + walkdir]
-    end
+  subgraph Backend[Rust commands]
+    Rust --> Apps[list_apps/open_app]
+    Rust --> Files[launcher_search_files/search_files/smart_search_files/read_file/open_file]
+    Rust --> Capture[capture_region]
+    Rust --> Docker[Docker CLI + Hub API proxy]
+    Rust --> Notes[(SQLite notes)]
+    Rust --> Net[get_network_info]
+    Rust --> Terminal[terminal command runner]
+    Rust --> ShortMgr[shortcut/window/focus management]
+  end
 
-    subgraph "System"
-        X --> AB[Screen Capture]
-        Y --> AC[Image Crop/Save]
-        Z --> AD[OCR Text Extraction]
-        T --> AE[Docker CLI]
-        Q --> AF[macOS/Win/Linux Apps]
-        W --> AG[Menu Bar Icon]
-        AA --> AH[File System]
-    end
+  Chat --> Providers[OpenAI/Kimi/Gemini/Anthropic]
+  Plugins --> WebAPIs[Open-Meteo, Cloudflare speed test, Google search URL]
+  Docker --> DockerCLI[Docker CLI/daemon]
+  Capture --> OS[Screen, clipboard, OCR]
 ```
 
-## Window Architecture
-
-GQuick uses two Tauri windows:
-
-1. **"main"** — The launcher interface (search, chat, settings, actions)
-2. **"selector"** — Fullscreen transparent overlay for region selection
-
-Both share the same HTML entry point; `main.tsx` routes based on `window.label`.
-
-The Rust backend owns launcher focus behavior. Before showing/focusing the **"main"** window, it records the previously focused app/window and restores it when the launcher hides or closes (macOS bundle id via `osascript`, Windows HWND via `windows-sys`, Linux/X11 `xdotool` best effort).
-
-## Plugin Architecture
-
-The plugin system allows decoupled search providers:
+## Runtime data flow
 
 ```mermaid
 flowchart LR
-    Query[User Query] --> Registry[Plugin Registry]
-    Registry --> P1[App Launcher]
-    Registry --> P2[File Search]
-    Registry --> P3[Calculator]
-    Registry --> P4[Docker]
-    Registry --> P5[Web Search]
-    Registry --> P6[Translate]
-    P1 --> Results[Flattened Results]
-    P2 --> Results
-    P3 --> Results
-    P4 --> Results
-    P5 --> Results
-    P6 --> Results
-    Results --> UI[App.tsx List]
+  Query[Launcher query] --> Router[getPluginsForQuery]
+  Router --> Prefix{Explicit prefix?}
+  Prefix -->|yes| Matched[Only matching prefixed plugins]
+  Prefix -->|no| All[All plugins]
+  Matched --> Search[getItems(query)]
+  All --> Search
+  Search --> Results[Flatten + score sort]
+  Results --> Select[Enter/click]
+  Select --> Action[Plugin onSelect/actions]
+  Action --> Invoke[Tauri invoke or frontend API]
 ```
 
-Each plugin implements `GQuickPlugin`:
-- `metadata`: ID, title, icon, keywords, subtitle
-- `getItems(query)`: Returns `Promise<SearchResultItem[]>`
+## Key corrections from validation
 
-## Data Flow
+- Plugin tool manager lives at `src/utils/toolManager.ts`, not `src/plugins/toolManager.ts`.
+- Current plugin registry includes `speedtestPlugin`; older docs omitted it.
+- Docker plugin no longer exposes AI tools in current code. Docker search/actions are UI/plugin-driven and backed by Rust commands plus frontend Docker Hub search.
+- Web Search plugin does not expose an AI tool. OpenAI hosted web search support is handled in `App.tsx`/streaming for supported OpenAI Responses models.
+- File search is runtime `jwalk` scanning with safety policy, not a persistent file index.
+- Backend command surface now includes Docker Compose/logs/exec/inspect/prune, Docker Hub search, inline terminal commands, `quit_app`, and `hide_main_window`.
 
-### Search Flow
-```
-User Input → Debounce (150ms) → Parallel Plugin Queries → Flatten + Sort → Render
-```
+## Documentation index
 
-### Screenshot/OCR Flow
-```
-Alt+S/O → Create Selector Window → User Drags Region → 
-Send Coords to Rust → Hide Window → 150ms Delay → 
-xcap Capture → Crop → Save to Desktop → Handle Mode
-(screenshot: copy image to clipboard | ocr: run Tesseract → copy text to clipboard)
-```
-
-### AI Chat Flow (Real Streaming)
-```
-User Message + Optional Images → Provider-specific SSE streaming →
-Real-time Markdown rendering in chat UI
-```
-
-### Quick Translate Flow
-```
-User types "t: text" or "> text" → 400ms debounce → AI API call →
-Single result display → Enter copies to clipboard
-```
-
-## Key Design Decisions
-
-1. **Rust handles all screen capture and OCR**: Avoids browser security restrictions; Tesseract runs locally
-2. **Single HTML with window routing**: Simplifies build, shared CSS/JS
-3. **localStorage for settings**: Simple but insecure for API keys
-4. **Plugin system**: Easy to add new search providers
-5. **Transparent borderless windows**: Native Spotlight-like feel
-6. **Real AI streaming via SSE**: Responsive chat experience across all providers
-7. **File index with caching**: 5-minute TTL, home directory, max depth 6
-8. **Focus restoration on launcher dismiss**: Preserve the user's previous foreground app/window after transient launcher use
-
-## Docker Expansion Guidance
-
-Docker currently uses `src/plugins/docker.tsx` for launcher search/actions and `src-tauri/src/lib.rs` for CLI-backed commands. The expansion should add a dedicated Docker view in `App.tsx` opened by `Cmd/Ctrl + Left Shift + D`, while keeping quick Docker Hub search in the plugin.
-
-Command boundary: frontend calls Docker Hub public API for remote search; Rust executes all local Docker and Docker Compose operations through typed Tauri commands. Rust must detect CLI missing vs daemon down explicitly before local operations.
-
-See `arch/components/docker.md` for command surface, target flow, data models, confirmations, and cross-platform caveats.
+- `arch/context.md` — Navigator-facing architecture context.
+- `arch/plugin-system.md` — plugin interface, registry, routing, lifecycle.
+- `arch/plugins.md` — current plugin catalog and capabilities.
+- `arch/plugin-tools.md` — AI tool-calling architecture and current tool inventory.
+- `arch/backend-tauri.md` — Rust command surface and cross-platform integrations.
+- `arch/data/flows.md` — major app data flows.
+- `arch/data/models.md` — key data models and schemas.
+- `arch/api/contracts.md` — Tauri/frontend/API contracts.
+- `arch/api/sequences.md` — sequence diagrams.
+- `arch/components/relationships.md` — component relationships.

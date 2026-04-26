@@ -14,6 +14,24 @@ export interface StreamToolCallbacks {
   onError: (error: string) => void;
 }
 
+interface OpenAIUrlCitation {
+  url: string;
+  title?: string;
+}
+
+function getSafeHttpUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function escapeMarkdownLinkText(text: string): string {
+  return text.replace(/([\\[\]])/g, "\\$1");
+}
+
 async function readSSEStream(
   response: Response,
   onLine: (line: string) => void,
@@ -260,6 +278,98 @@ export async function streamOpenAITools(
   } else {
     callbacks.onDone();
   }
+}
+
+export async function streamOpenAIResponsesTools(
+  url: string,
+  headers: Record<string, string>,
+  body: any,
+  callbacks: StreamToolCallbacks
+) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+    callbacks.onError(err.error?.message || `API error: ${res.status}`);
+    return;
+  }
+
+  let content = "";
+  const citations: OpenAIUrlCitation[] = [];
+  const toolCalls: ToolCall[] = [];
+
+  const addCitation = (annotation: any) => {
+    const url = annotation?.url;
+    if (typeof url !== "string") return;
+    const safeUrl = getSafeHttpUrl(url);
+    if (!safeUrl || citations.some((c) => c.url === safeUrl)) return;
+    citations.push({ url: safeUrl, title: annotation.title });
+  };
+
+  const appendCitations = (text: string) => {
+    if (citations.length === 0) return text;
+    const refs = citations
+      .map((citation, index) => {
+        const title = typeof citation.title === "string" && citation.title.trim()
+          ? citation.title
+          : citation.url;
+        return `${index + 1}. [${escapeMarkdownLinkText(title)}](<${citation.url}>)`;
+      })
+      .join("\n");
+    return `${text.trimEnd()}\n\n**Sources**\n${refs}`;
+  };
+
+  await readSSEStream(
+    res,
+    (line) => {
+      if (!line.startsWith("data: ")) return;
+      const data = line.slice(6);
+      if (data === "[DONE]") return;
+      try {
+        const parsed = JSON.parse(data);
+
+        if (parsed.type === "response.output_text.delta" && parsed.delta) {
+          content += parsed.delta;
+          callbacks.onContent(content);
+        }
+
+        if (parsed.type === "response.output_text.annotation.added") {
+          addCitation(parsed.annotation);
+        }
+
+        if (parsed.type === "response.output_text.done") {
+          const annotations = parsed.annotations ?? parsed.text?.annotations;
+          if (Array.isArray(annotations)) annotations.forEach(addCitation);
+        }
+
+        if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
+          const rawArgs = parsed.item.arguments || "{}";
+          let args: Record<string, any>;
+          try {
+            args = rawArgs ? JSON.parse(rawArgs) : {};
+          } catch {
+            args = { _raw: rawArgs };
+          }
+          toolCalls.push({
+            id: parsed.item.call_id || parsed.item.id,
+            name: parsed.item.name,
+            arguments: args,
+          });
+        }
+      } catch {
+        // ignore parse errors for malformed chunks
+      }
+    },
+    callbacks.onError
+  );
+
+  const finalContent = appendCitations(content);
+  if (finalContent !== content) callbacks.onContent(finalContent);
+  callbacks.onDone(toolCalls.length > 0 ? toolCalls : undefined);
 }
 
 export async function streamGeminiTools(

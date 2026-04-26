@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Key, Eye, EyeOff, Loader2, Command, Save } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import ShortcutRecorder from "./components/ShortcutRecorder";
 
@@ -34,6 +34,13 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [ocrShortcut, setOcrShortcut] = useState("Alt+O");
   const [quickNoteShortcut, setQuickNoteShortcut] = useState("CmdOrCtrl+Shift+N");
   const [searchNotesShortcut, setSearchNotesShortcut] = useState("CmdOrCtrl+Shift+S");
+  const [uiLayout, setUiLayout] = useState<"default" | "compact">("default");
+  const [isQuitDialogOpen, setIsQuitDialogOpen] = useState(false);
+  const [isQuitting, setIsQuitting] = useState(false);
+  const [quitError, setQuitError] = useState("");
+  const quitButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelQuitRef = useRef<HTMLButtonElement>(null);
+  const confirmQuitRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const savedKey = localStorage.getItem("api-key");
@@ -59,6 +66,11 @@ export default function Settings({ onClose }: { onClose: () => void }) {
 
     const savedSearchNotesShortcut = localStorage.getItem("search-notes-shortcut");
     if (savedSearchNotesShortcut) setSearchNotesShortcut(savedSearchNotesShortcut);
+
+    const savedUiLayout = localStorage.getItem("ui-layout");
+    if (savedUiLayout === "default" || savedUiLayout === "compact") {
+      setUiLayout(savedUiLayout);
+    }
 
     // Load cached models if available
     const cachedModels = localStorage.getItem(`models-${savedProvider || "openai"}`);
@@ -183,9 +195,84 @@ export default function Settings({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  const openQuitDialog = () => {
+    setQuitError("");
+    setIsQuitDialogOpen(true);
+  };
+
+  const closeQuitDialog = useCallback(() => {
+    if (isQuitting) return;
+    setIsQuitDialogOpen(false);
+    setQuitError("");
+    requestAnimationFrame(() => quitButtonRef.current?.focus());
+  }, [isQuitting]);
+
+  useEffect(() => {
+    if (!isQuitDialogOpen) return;
+
+    cancelQuitRef.current?.focus();
+
+    const stopGlobalKeyHandlers = (event: KeyboardEvent) => {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        stopGlobalKeyHandlers(event);
+        closeQuitDialog();
+        return;
+      }
+
+      if (event.key === "Tab") {
+        stopGlobalKeyHandlers(event);
+
+        const focusableButtons = [cancelQuitRef.current, confirmQuitRef.current].filter(
+          (button): button is HTMLButtonElement => button !== null && !button.disabled
+        );
+
+        if (focusableButtons.length === 0) {
+          event.preventDefault();
+          return;
+        }
+
+        const firstButton = focusableButtons[0];
+        const lastButton = focusableButtons[focusableButtons.length - 1];
+        const activeIndex = focusableButtons.findIndex((button) => button === document.activeElement);
+
+        if (activeIndex === -1) {
+          event.preventDefault();
+          (event.shiftKey ? lastButton : firstButton).focus();
+        } else if (event.shiftKey && document.activeElement === firstButton) {
+          event.preventDefault();
+          lastButton.focus();
+        } else if (!event.shiftKey && document.activeElement === lastButton) {
+          event.preventDefault();
+          firstButton.focus();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [closeQuitDialog, isQuitDialogOpen]);
+
+  const confirmQuit = async () => {
+    setIsQuitting(true);
+    setQuitError("");
+
+    try {
+      await invoke("quit_app");
+    } catch (err) {
+      setQuitError(err instanceof Error ? err.message : String(err));
+      setIsQuitting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-125 px-3 text-zinc-200">
-      <div className="space-y-6 flex-1 overflow-y-auto py-3 pb-0 mb-2 custom-scrollbar">
+      <div className="space-y-3 flex-1 overflow-y-auto py-3 pb-0 mb-2 custom-scrollbar">
         {/* Global Shortcut Configuration */}
         <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
           <div className="flex items-center justify-between">
@@ -277,6 +364,26 @@ export default function Settings({ onClose }: { onClose: () => void }) {
               </p>
             </div>
           </div>
+          <div className="border-t border-white/5 pt-4 mt-2">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">UI Layout</span>
+              <select
+                value={uiLayout}
+                onChange={(e) => {
+                  const value = e.target.value as "default" | "compact";
+                  setUiLayout(value);
+                  localStorage.setItem("ui-layout", value);
+                }}
+                className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500/50 transition-all appearance-none cursor-pointer"
+              >
+                <option value="default">Default</option>
+                <option value="compact">Compact</option>
+              </select>
+              <p className="text-[11px] text-zinc-500 ml-1">
+                Default shows suggestions when search is empty. Compact hides them.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* API Key Configuration */}
@@ -286,6 +393,11 @@ export default function Settings({ onClose }: { onClose: () => void }) {
               <Key className="h-4 w-4 text-zinc-400" />
               API Configuration
             </label>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+            <p>AI features are provided for your convenience and are used at your own discretion. Please review and verify outputs before relying on them.</p>
           </div>
 
           <div className="space-y-3">
@@ -363,8 +475,19 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      <div className="py-3 flex justify-end border-t border-white/5 mb-2">
+      <div className="py-3 border-t border-white/5 flex items-center justify-between gap-3">
         <button
+          ref={quitButtonRef}
+          type="button"
+          aria-label="Quit GQuick"
+          onClick={openQuitDialog}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer bg-red-500/10 text-red-300 border border-red-500/20 hover:bg-red-500/15 hover:text-red-200 hover:border-red-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+        >
+          <Power className="h-4 w-4 text-red-400" />
+          Quit GQuick
+        </button>
+        <button
+          type="button"
           onClick={saveSettings}
           className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
         >
@@ -372,6 +495,58 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           Save
         </button>
       </div>
+
+      {isQuitDialogOpen && (
+        <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="quit-dialog-title"
+            aria-describedby="quit-dialog-description"
+            className="w-full max-w-sm rounded-2xl bg-zinc-950/95 border border-white/10 shadow-2xl shadow-black/40 p-4"
+          >
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+              <span className="h-7 w-7 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center">
+                <AlertTriangle className="h-4 w-4" />
+              </span>
+              <h2 id="quit-dialog-title">Quit GQuick?</h2>
+            </div>
+
+            <p id="quit-dialog-description" className="mt-3 text-xs leading-5 text-zinc-400">
+              This closes all GQuick windows and stops background shortcuts until you open the app again.
+            </p>
+
+            {quitError && (
+              <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                Failed to quit GQuick: {quitError}
+              </div>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                ref={cancelQuitRef}
+                type="button"
+                onClick={closeQuitDialog}
+                disabled={isQuitting}
+                className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 cursor-pointer border border-white/10 text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+              >
+                Cancel
+              </button>
+              <button
+                ref={confirmQuitRef}
+                type="button"
+                onClick={confirmQuit}
+                disabled={isQuitting}
+                aria-label="Quit GQuick"
+                className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs cursor-pointer font-medium disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 flex items-center gap-1.5"
+              >
+                {isQuitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isQuitting ? "Quitting…" : "Quit"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

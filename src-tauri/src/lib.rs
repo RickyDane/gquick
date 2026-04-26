@@ -13,11 +13,6 @@ use tauri_plugin_opener::OpenerExt;
 use tesseract::Tesseract;
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -1710,6 +1705,94 @@ fn read_file_blocking(path: String, max_bytes: Option<usize>) -> Result<String, 
     read_ai_file_content(path, limit).ok_or_else(|| {
         "File could not be read as text, is too large, or permission was denied".to_string()
     })
+}
+
+#[derive(serde::Serialize)]
+struct WebSearchResult {
+    title: String,
+    url: String,
+    snippet: String,
+}
+
+#[tauri::command]
+async fn web_search(query: String) -> Result<Vec<WebSearchResult>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err("Search query cannot be empty.".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut url = reqwest::Url::parse("https://html.duckduckgo.com/html/")
+        .map_err(|e| format!("Failed to parse search URL: {e}"))?;
+    url.query_pairs_mut().append_pair("q", trimmed);
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Web search request failed: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Web search returned HTTP {}.", status.as_u16()));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read web search response: {e}"))?;
+
+    let document = scraper::Html::parse_document(&html);
+    let result_selector = scraper::Selector::parse(".result").map_err(|_| "Failed to parse result selector".to_string())?;
+    let title_selector = scraper::Selector::parse(".result__title > a").map_err(|_| "Failed to parse title selector".to_string())?;
+    let url_selector = scraper::Selector::parse(".result__url").map_err(|_| "Failed to parse URL selector".to_string())?;
+    let snippet_selector = scraper::Selector::parse(".result__snippet").map_err(|_| "Failed to parse snippet selector".to_string())?;
+
+    let mut results = Vec::new();
+
+    for result in document.select(&result_selector).take(8) {
+        let title = result
+            .select(&title_selector)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        let url = result
+            .select(&url_selector)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .or_else(|| {
+                result
+                    .select(&title_selector)
+                    .next()
+                    .and_then(|el| el.value().attr("href"))
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+
+        let snippet = result
+            .select(&snippet_selector)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        if title.is_empty() && url.is_empty() {
+            continue;
+        }
+
+        results.push(WebSearchResult {
+            title,
+            url,
+            snippet,
+        });
+    }
+
+    Ok(results)
 }
 
 #[tauri::command]
@@ -4339,6 +4422,7 @@ pub fn run() {
             launcher_search_files,
             smart_search_files,
             read_file,
+            web_search,
             open_file,
             update_main_shortcut,
             update_screenshot_shortcut,

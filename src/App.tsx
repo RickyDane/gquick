@@ -18,6 +18,7 @@ import { performAiOcr } from "./utils/aiOcr";
 import { streamOpenAITools, streamOpenAIResponsesTools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
 import { getAllTools, executeTool, convertToolsForProvider, convertToolsForOpenAIResponses, convertMessagesToOpenAI, convertMessagesToOpenAIResponsesInput, convertMessagesToGemini, convertMessagesToAnthropic } from "./utils/toolManager";
 import { ToolCall } from "./plugins/types";
+import { getSavedLocation } from "./utils/location";
 import { recordUsage, getRecentItems } from "./utils/usageTracker";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -1417,9 +1418,14 @@ function App() {
     const tools = getAllTools();
     const providerTools = tools.length > 0 ? convertToolsForProvider(tools, provider as "openai" | "kimi" | "google" | "anthropic") : undefined;
 
-    const baseSystemContent = "You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, and network queries. Use them when helpful. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate.";
+    const savedLocation = getSavedLocation();
+    const locationContext = savedLocation
+      ? `The user's current location is ${savedLocation.name}${savedLocation.country ? `, ${savedLocation.country}` : ""} (lat: ${savedLocation.latitude}, lon: ${savedLocation.longitude}). Use this location by default for weather and location-related queries unless the user specifies a different location.`
+      : "";
+
+    const baseSystemContent = "You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, network queries, and web search. Use them when helpful. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate." + (locationContext ? "\n\n" + locationContext : "");
     const systemContent = notesContextStr
-      ? `You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, and network queries. Use them when helpful.\n\nThe user has shared their saved notes below. Use the notes to answer their question if relevant, but you can also draw on your general knowledge. If the notes contain the answer, reference them. If not, answer from your knowledge. Always format responses using Markdown.`
+      ? `You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, network queries, and web search. Use them when helpful.\n\nThe user has shared their saved notes below. Use the notes to answer their question if relevant, but you can also draw on your general knowledge. If the notes contain the answer, reference them. If not, answer from your knowledge. Always format responses using Markdown.` + (locationContext ? "\n\n" + locationContext : "")
       : baseSystemContent;
 
     async function streamWithTools(msgs: Message[], notesContext: string | null, depth = 0) {

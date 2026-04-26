@@ -16,36 +16,9 @@ import {
 } from "lucide-react";
 import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 import type { LucideIcon } from "lucide-react";
+import { getSavedLocation, saveLocation, geocodeLocation, searchLocations, SavedLocation } from "../utils/location";
 
-const STORAGE_KEY = "weather-location";
-const GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
-
-interface SavedLocation {
-  name: string;
-  latitude: number;
-  longitude: number;
-  country?: string;
-  admin1?: string;
-}
-
-function getSavedLocation(): SavedLocation | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed.name !== "string" || typeof parsed.latitude !== "number" || typeof parsed.longitude !== "number") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function saveLocation(loc: SavedLocation) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
-}
 
 function getWeatherIcon(code: number): LucideIcon {
   if (code === 0) return Sun;
@@ -93,15 +66,6 @@ interface ForecastDay {
   minTemp: number;
   weatherCode: number;
   precipProb: number;
-}
-
-interface GeocodingResult {
-  id?: number;
-  name: string;
-  latitude: number;
-  longitude: number;
-  country?: string;
-  admin1?: string;
 }
 
 interface WeatherData {
@@ -278,7 +242,7 @@ function NoLocationPrompt() {
       <div>
         <p className="text-sm font-medium text-zinc-300">No weather location set</p>
         <p className="text-xs text-zinc-500 mt-1">
-          Type <code className="bg-white/10 px-1 py-0.5 rounded text-zinc-400">/wt London</code> to search for a city
+          Type <code className="bg-white/10 px-1 py-0.5 rounded text-zinc-400">/wt London</code> to search for a city, or set a location in Settings
         </p>
       </div>
     </div>
@@ -300,27 +264,6 @@ async function fetchWeatherData(
   return data;
 }
 
-async function geocodeLocation(
-  name: string,
-  signal?: AbortSignal
-): Promise<SavedLocation | null> {
-  const res = await fetch(
-    `${GEOCODING_API}?name=${encodeURIComponent(name)}&count=1&language=en&format=json`,
-    { signal }
-  );
-  if (!res.ok) throw new Error("Geocoding request failed");
-  const data = await res.json();
-  if (!data.results || data.results.length === 0) return null;
-  const result = data.results[0];
-  return {
-    name: result.name,
-    latitude: result.latitude,
-    longitude: result.longitude,
-    country: result.country,
-    admin1: result.admin1,
-  };
-}
-
 export const weatherPlugin: GQuickPlugin = {
   metadata: {
     id: "weather",
@@ -337,9 +280,9 @@ export const weatherPlugin: GQuickPlugin = {
       parameters: {
         type: "object",
         properties: {
-          location: { type: "string", description: "City name or location to get weather for" },
+          location: { type: "string", description: "City name or location to get weather for. If omitted, uses the user's saved location." },
         },
-        required: ["location"],
+        required: [],
       },
     },
     {
@@ -348,16 +291,46 @@ export const weatherPlugin: GQuickPlugin = {
       parameters: {
         type: "object",
         properties: {
-          location: { type: "string", description: "City name or location to get forecast for" },
+          location: { type: "string", description: "City name or location to get forecast for. If omitted, uses the user's saved location." },
         },
-        required: ["location"],
+        required: [],
       },
     },
   ],
   executeTool: async (name: string, args: Record<string, any>): Promise<ToolResult> => {
-    const locationName = args.location;
+    let locationName = args.location;
     if (typeof locationName !== "string" || !locationName.trim()) {
-      return { content: "", success: false, error: "Missing location parameter" };
+      const saved = getSavedLocation();
+      if (!saved) {
+        return { content: "", success: false, error: "No location provided and no saved location set. Please specify a location or set one in Settings." };
+      }
+      const weather = await fetchWeatherData(saved.latitude, saved.longitude);
+
+      if (name === "get_current_weather") {
+        const current = weather.current;
+        const condition = getWeatherConditionText(current.weather_code);
+        const summary = `Current weather in ${saved.name}${saved.country ? `, ${saved.country}` : ""}:\n` +
+          `Temperature: ${Math.round(current.temperature_2m)}°C (feels like ${Math.round(current.apparent_temperature)}°C)\n` +
+          `Condition: ${condition}\n` +
+          `Humidity: ${current.relative_humidity_2m}%\n` +
+          `Wind Speed: ${Math.round(current.wind_speed_10m)} km/h`;
+        return { content: summary, success: true };
+      }
+
+      if (name === "get_weather_forecast") {
+        const daily = weather.daily;
+        let summary = `7-day weather forecast for ${saved.name}${saved.country ? `, ${saved.country}` : ""}:\n`;
+        for (let i = 0; i < daily.time.length; i++) {
+          const date = new Date(daily.time[i]).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+          const condition = getWeatherConditionText(daily.weather_code[i]);
+          const maxTemp = Math.round(daily.temperature_2m_max[i]);
+          const minTemp = Math.round(daily.temperature_2m_min[i]);
+          summary += `\n${date}: ${condition}, High ${maxTemp}°C, Low ${minTemp}°C`;
+        }
+        return { content: summary, success: true };
+      }
+
+      return { content: "", success: false, error: `Unknown tool: ${name}` };
     }
 
     try {
@@ -474,13 +447,9 @@ export const weatherPlugin: GQuickPlugin = {
 
     // Geocoding search
     try {
-      const res = await fetch(
-        `${GEOCODING_API}?name=${encodeURIComponent(locationQuery)}&count=5&language=en&format=json`
-      );
-      if (!res.ok) throw new Error("Geocoding request failed");
-      const data = await res.json();
+      const results = await searchLocations(locationQuery);
 
-      if (!data.results || data.results.length === 0) {
+      if (results.length === 0) {
         return [
           {
             id: "weather-no-results",
@@ -494,20 +463,12 @@ export const weatherPlugin: GQuickPlugin = {
         ];
       }
 
-      return (data.results as GeocodingResult[]).map((result) => {
-        const loc: SavedLocation = {
-          name: result.name,
-          latitude: result.latitude,
-          longitude: result.longitude,
-          country: result.country,
-          admin1: result.admin1,
-        };
-
+      return results.map((loc, idx) => {
         return {
-          id: `weather-loc-${result.name}-${result.latitude}-${result.longitude}`,
+          id: `weather-loc-${loc.name}-${loc.latitude}-${loc.longitude}-${idx}`,
           pluginId: "weather",
-          title: result.name,
-          subtitle: [result.admin1, result.country].filter(Boolean).join(", ") || undefined,
+          title: loc.name,
+          subtitle: [loc.admin1, loc.country].filter(Boolean).join(", ") || undefined,
           icon: MapPin,
           score: 200,
           onSelect: () => {

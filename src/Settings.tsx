@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle } from "lucide-react";
+import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle, MapPin, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import ShortcutRecorder from "./components/ShortcutRecorder";
+import { getSavedLocation, saveLocation, clearSavedLocation, SavedLocation, searchLocations } from "./utils/location";
 
 interface Model {
   id: string;
@@ -42,6 +43,14 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const cancelQuitRef = useRef<HTMLButtonElement>(null);
   const confirmQuitRef = useRef<HTMLButtonElement>(null);
 
+  // Location state
+  const [savedLocation, setSavedLocation] = useState<SavedLocation | null>(null);
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locationResults, setLocationResults] = useState<SavedLocation[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const locationAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     const savedKey = localStorage.getItem("api-key");
     if (savedKey) setApiKey(savedKey);
@@ -81,6 +90,9 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         // ignore parse error
       }
     }
+
+    // Load saved location
+    setSavedLocation(getSavedLocation());
   }, []);
 
   // Fetch models when provider or api key changes
@@ -187,6 +199,54 @@ export default function Settings({ onClose }: { onClose: () => void }) {
       clearTimeout(debounce);
     };
   }, [apiProvider, apiKey]);
+
+  const handleLocationSearch = async () => {
+    const query = locationQuery.trim();
+    if (!query) return;
+
+    if (locationAbortRef.current) {
+      locationAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    locationAbortRef.current = controller;
+
+    setIsSearchingLocation(true);
+    setLocationError("");
+    setLocationResults([]);
+
+    try {
+      const results = await searchLocations(query, controller.signal);
+      if (!controller.signal.aborted) {
+        setLocationResults(results);
+        if (results.length === 0) {
+          setLocationError("No locations found");
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        setLocationError(err.message || "Search failed");
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsSearchingLocation(false);
+      }
+    }
+  };
+
+  const handleSelectLocation = (loc: SavedLocation) => {
+    saveLocation(loc);
+    setSavedLocation(loc);
+    setLocationResults([]);
+    setLocationQuery("");
+    window.dispatchEvent(new CustomEvent("gquick-weather-saved", { detail: loc.name }));
+  };
+
+  const handleClearLocation = () => {
+    clearSavedLocation();
+    setSavedLocation(null);
+    setLocationResults([]);
+    setLocationQuery("");
+  };
 
   const saveSettings = () => {
     localStorage.setItem("api-key", apiKey);
@@ -471,6 +531,92 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Location Configuration */}
+        <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-zinc-400" />
+              Location
+            </label>
+          </div>
+
+          {savedLocation ? (
+            <div className="flex items-center justify-between bg-zinc-800/50 border border-white/10 rounded-xl px-3 py-2">
+              <div className="flex items-center gap-2 text-sm text-zinc-200">
+                <span>📍</span>
+                <span>{savedLocation.name}{savedLocation.country ? `, ${savedLocation.country}` : ""}</span>
+              </div>
+              <button
+                onClick={handleClearLocation}
+                className="p-1 hover:bg-white/10 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
+                aria-label="Clear location"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">No location set. Search for a city to set your default location.</p>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={locationQuery}
+                onChange={(e) => setLocationQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleLocationSearch();
+                  }
+                }}
+                placeholder="Search for a city..."
+                className="flex-1 bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500/50 transition-all"
+              />
+              <button
+                onClick={() => void handleLocationSearch()}
+                disabled={isSearchingLocation || !locationQuery.trim()}
+                className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
+              >
+                {isSearchingLocation ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Searching...</span>
+                  </>
+                ) : (
+                  <span>Search</span>
+                )}
+              </button>
+            </div>
+
+            {locationError && (
+              <div className="px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl">
+                {locationError}
+              </div>
+            )}
+
+            {locationResults.length > 0 && (
+              <div className="flex flex-col gap-1">
+                {locationResults.map((result, idx) => (
+                  <button
+                    key={`${result.name}-${result.latitude}-${idx}`}
+                    onClick={() => handleSelectLocation(result)}
+                    className="flex items-center gap-2 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-white/5 rounded-lg transition-colors cursor-pointer border border-transparent hover:border-white/10"
+                  >
+                    <MapPin className="h-4 w-4 text-zinc-500 shrink-0" />
+                    <div className="flex flex-col min-w-0">
+                      <span className="truncate">{result.name}</span>
+                      {[result.admin1, result.country].filter(Boolean).join(", ") && (
+                        <span className="text-xs text-zinc-500 truncate">{[result.admin1, result.country].filter(Boolean).join(", ")}</span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

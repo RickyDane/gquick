@@ -32,10 +32,11 @@ graph TB
 
 - `src/App.tsx`: main launcher/search/chat/settings/actions/notes/docker state machine, plugin orchestration, AI streaming/tool execution, inline terminal UI.
 - `src/Selector.tsx`: transparent fullscreen region selector for screenshots/OCR.
-- `src/Settings.tsx`: API provider/model/key and global shortcut configuration.
+- `src/Settings.tsx`: API provider/model/key, global shortcut, and saved location configuration.
 - `src/plugins/*`: plugin implementations returning search results/actions/previews; some expose AI tools.
 - `src/utils/toolManager.ts`: discovers plugin tools, converts schemas/messages per provider, dispatches tool execution.
 - `src/utils/streaming.ts`: SSE streaming for OpenAI/Kimi/Gemini/Anthropic plus tool-call accumulation.
+- `src/utils/location.ts`: reads/writes saved location from `localStorage` for weather and other location-aware plugins.
 - `src/components/NotesView.tsx`: CRUD notes manager.
 - `src/components/DockerView.tsx`: Docker management UI for status, containers, images, Hub, logs, exec, inspect, prune, Compose.
 - `src-tauri/src/lib.rs`: Tauri command surface and cross-platform integrations.
@@ -55,7 +56,7 @@ Current registry order:
 9. Speedtest (`speedtestPlugin`)
 10. Weather (`weatherPlugin`)
 
-Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `create_note`, `get_network_info`, `get_current_weather`, `get_weather_forecast`. Docker, Web Search, Applications, Translate, and Speedtest do not currently expose plugin AI tools.
+Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `create_note`, `get_network_info`, `get_current_weather`, `get_weather_forecast`, `web_search`. `get_current_weather` and `get_weather_forecast` use the saved location from Settings as a fallback when no explicit location is provided. Docker, Applications, Translate, and Speedtest do not currently expose plugin AI tools.
 
 ## Data Flow
 
@@ -84,7 +85,7 @@ Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `cre
 
 ## Current Sprint/Focus
 
-Architecture documentation was validated and refreshed for overall functionality, plugin system, AI tool calling, and backend commands. See `arch/README.md` for documentation index.
+Architecture documentation was validated and refreshed for overall functionality, plugin system, AI tool calling, and backend commands. See `arch/README.md` for documentation index. Saved location feature completed: users can configure a default location in Settings, and weather AI tools fall back to it when no location is specified.
 
 ## Key Decisions
 

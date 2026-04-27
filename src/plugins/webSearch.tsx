@@ -2,6 +2,7 @@ import { Globe } from "lucide-react";
 import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { normalizeUrlQuery } from "./urlRecognition";
 
 export const webSearchPlugin: GQuickPlugin = {
   metadata: {
@@ -55,6 +56,7 @@ export const webSearchPlugin: GQuickPlugin = {
       : query;
     const q = query.toLowerCase();
     const isWebSearchQuery = q.includes("google") || q.includes("search") || q.includes("web");
+    const normalizedUrl = searchPrefixMatch ? null : normalizeUrlQuery(query);
 
     if (searchPrefixMatch && !searchQuery) {
       return [{
@@ -65,6 +67,24 @@ export const webSearchPlugin: GQuickPlugin = {
         icon: Globe,
         score: 100,
         onSelect: () => {},
+      }];
+    }
+
+    if (normalizedUrl) {
+      return [{
+        id: `web-open-url-${normalizedUrl.url}`,
+        pluginId: "web-search",
+        title: `Open ${normalizedUrl.displayUrl}`,
+        subtitle: "Opens URL in your default browser",
+        icon: Globe,
+        score: 1000,
+        onSelect: async () => {
+          try {
+            await openUrl(normalizedUrl.url);
+          } catch (e) {
+            console.error("Failed to open URL", e);
+          }
+        },
       }];
     }
 

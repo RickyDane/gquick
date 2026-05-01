@@ -40,7 +40,7 @@ function RecentIcon({ entry }: { entry: UsageEntry }) {
     );
   }
   if (entry.pluginId === "file-search") {
-    return entry.id.endsWith("/") || !entry.id.includes(".")
+    return entry.id.endsWith("/")
       ? <Folder className="h-5 w-5 shrink-0 text-zinc-400" />
       : <FileText className="h-5 w-5 shrink-0 text-zinc-400" />;
   }

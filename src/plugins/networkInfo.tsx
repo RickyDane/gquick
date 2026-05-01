@@ -237,7 +237,7 @@ function NetworkInfoPreview({
               event.stopPropagation();
               void requestWifiPermission();
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:bg-amber-500/30"
+            className="inline-flex items-center gap-1.5 cursor-pointer rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:bg-amber-500/30"
           >
             Grant Permission
           </button>
@@ -248,7 +248,7 @@ function NetworkInfoPreview({
               event.stopPropagation();
               void openWifiPrivacySettings();
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:bg-white/20"
+            className="inline-flex items-center gap-1.5 cursor-pointer rounded-lg bg-white/10 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:bg-white/20"
           >
             Open System Settings
           </button>
@@ -260,7 +260,7 @@ function NetworkInfoPreview({
               event.stopPropagation();
               action.onRun();
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:bg-white/20"
+            className="inline-flex items-center gap-1.5 cursor-pointer rounded-lg bg-white/10 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:bg-white/20"
           >
             <Copy className="h-3.5 w-3.5" />
             {action.label}

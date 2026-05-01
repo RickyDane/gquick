@@ -46,9 +46,13 @@ flowchart LR
   Router --> Prefix{Explicit prefix?}
   Prefix -->|yes| Matched[Only matching prefixed plugins]
   Prefix -->|no| All[All plugins]
-  Matched --> Search[getItems(query)]
-  All --> Search
-  Search --> Results[Flatten + score sort]
+  Matched --> Split{Debounce config?}
+  All --> Split
+  Split -->|none| Immediate[Immediate getItems]
+  Split -->|>0ms| Debounced[Debounced getItems]
+  Immediate --> Dedup[Deduplicate by id]
+  Debounced --> Dedup
+  Dedup --> Results[Flatten + score sort]
   Results --> Select[Enter/click]
   Select --> Action[Plugin onSelect/actions]
   Action --> Invoke[Tauri invoke or frontend API]
@@ -62,6 +66,7 @@ flowchart LR
 - Docker plugin no longer exposes AI tools in current code. Docker search/actions are UI/plugin-driven and backed by Rust commands plus frontend Docker Hub search.
 - Web Search plugin does not expose an AI tool. OpenAI hosted web search support is handled in `App.tsx`/streaming for supported OpenAI Responses models.
 - File search is runtime `jwalk` scanning with safety policy, not a persistent file index.
+- `recentFilesPlugin` is an immediate plugin that surfaces recently opened files/folders from `localStorage` usage history above filesystem scan results.
 - Backend command surface now includes Docker Compose/logs/exec/inspect/prune, Docker Hub search, inline terminal commands, `quit_app`, and `hide_main_window`.
 
 ## Documentation index
@@ -69,6 +74,7 @@ flowchart LR
 - `arch/context.md` — Navigator-facing architecture context.
 - `arch/plugin-system.md` — plugin interface, registry, routing, lifecycle.
 - `arch/plugins.md` — current plugin catalog and capabilities.
+- `arch/recent-files-plugin.md` — immediate plugin that surfaces recently opened files/folders from usage history.
 - `arch/plugin-tools.md` — AI tool-calling architecture and current tool inventory.
 - `arch/backend-tauri.md` — Rust command surface and cross-platform integrations.
 - `arch/data/flows.md` — major app data flows.

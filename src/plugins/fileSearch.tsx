@@ -253,8 +253,7 @@ export const fileSearchPlugin: GQuickPlugin = {
     if (!smartMode) {
       try {
         const files = await invoke<FileInfo[]>("launcher_search_files", { query });
-
-        return files.map((file) => ({
+        const results = files.map((file) => ({
           id: file.path,
           pluginId: "file-search",
           title: file.name,
@@ -269,6 +268,8 @@ export const fileSearchPlugin: GQuickPlugin = {
             }
           },
         }));
+
+        return results;
       } catch (e) {
         console.error("File search error:", e);
         return [];
@@ -306,7 +307,7 @@ export const fileSearchPlugin: GQuickPlugin = {
         if (!rankedSet.has(i)) orderedFiles.push(file);
       });
 
-      return orderedFiles.map((file) => ({
+      const results = orderedFiles.map((file) => ({
         id: file.path,
         pluginId: "file-search",
         title: file.name,
@@ -321,6 +322,8 @@ export const fileSearchPlugin: GQuickPlugin = {
           }
         },
       }));
+
+      return results;
     } catch (e) {
       console.error("Smart file search error:", e);
       return [];

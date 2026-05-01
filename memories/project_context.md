@@ -46,23 +46,27 @@ graph TB
 Current registry order:
 
 1. Applications (`appLauncherPlugin`)
-2. Files & Folders (`fileSearchPlugin`)
-3. Calculator (`calculatorPlugin`)
-4. Docker (`dockerPlugin`)
-5. Web Search (`webSearchPlugin`)
-6. Translate (`translatePlugin`)
-7. Notes (`notesPlugin`)
-8. Network info (`networkInfoPlugin`)
-9. Speedtest (`speedtestPlugin`)
-10. Weather (`weatherPlugin`)
+2. **Recent Files (`recentFilesPlugin`)** — immediate plugin (no debounce)
+3. Files & Folders (`fileSearchPlugin`)
+4. Calculator (`calculatorPlugin`)
+5. Docker (`dockerPlugin`)
+6. Web Search (`webSearchPlugin`)
+7. Translate (`translatePlugin`)
+8. Notes (`notesPlugin`)
+9. Network info (`networkInfoPlugin`)
+10. Speedtest (`speedtestPlugin`)
+11. Weather (`weatherPlugin`)
 
-Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `create_note`, `get_network_info`, `get_current_weather`, `get_weather_forecast`, `web_search`. `get_current_weather` and `get_weather_forecast` use the saved location from Settings as a fallback when no explicit location is provided. Docker, Applications, Translate, and Speedtest do not currently expose plugin AI tools.
+`recentFilesPlugin` is an immediate plugin: it reads from `localStorage` usage history (via `usageTracker.ts`) and returns matching recent files/folders with a high score (200) so they rank above filesystem scan results. It does not trigger the searching indicator and its results are deduplicated before debounced plugins.
+
+Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `create_note`, `get_network_info`, `get_current_weather`, `get_weather_forecast`, `web_search`. `get_current_weather` and `get_weather_forecast` use the saved location from Settings as a fallback when no explicit location is provided. Docker, Applications, Recent Files, Translate, and Speedtest do not currently expose plugin AI tools.
 
 ## Data Flow
 
-- Search: query → prefix routing via `getPluginsForQuery` → plugin `shouldSearch`/debounce → async `getItems` → score sort → `onSelect`/actions.
+- Search: query → prefix routing via `getPluginsForQuery` → split into immediate (no debounce) and debounced plugins → async `getItems` → deduplicate by `id` (first occurrence wins, immediate results take priority) → score sort → `onSelect`/actions. Immediate plugins do not trigger the searching indicator; only debounced plugins show loading state.
 - AI chat: user message/images → collect tools → provider-specific schema/message conversion → SSE stream → execute tool calls → append tool results → follow-up stream.
 - File search: runtime `jwalk` scan of safe roots with hidden/system/build/cache skips and no symlink following; smart search adds safe content previews and frontend AI ranking; `read_file` enforces absolute path, safe root, not hidden/secret/symlink, text, and byte caps.
+- Recent files: usage tracker records selections in `localStorage` with exponential decay scoring; `recentFilesPlugin` queries `getRecentItemsByPlugin("file-search", 5)` to surface recent files/folders above filesystem results.
 - Notes: quick capture/search/plugin tools/NotesView → Rust note commands → SQLite `notes` table.
 - Docker: `docker:` plugin and DockerView → Rust Docker commands → validated Docker CLI/Compose operations; Docker Hub search also available through frontend utility and Rust command.
 - Screenshot/OCR: global shortcut → selector window → `capture_region` → xcap crop/save → clipboard image or OCR text/event/base64 for AI vision.
@@ -86,6 +90,8 @@ Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `cre
 ## Current Sprint/Focus
 
 Architecture documentation was validated and refreshed for overall functionality, plugin system, AI tool calling, and backend commands. See `arch/README.md` for documentation index. Saved location feature completed: users can configure a default location in Settings, and weather AI tools fall back to it when no location is specified.
+
+**Recent update:** Added `recentFilesPlugin` (immediate plugin, no debounce) that surfaces recently opened files/folders from usage history stored in `localStorage`. Results are deduplicated with debounced plugins and ranked with high score (200) to appear above filesystem scan results. `SearchSuggestions` now shows file-search entries in the unified "Recent" section alongside apps.
 
 ## Key Decisions
 

@@ -7,19 +7,24 @@ sequenceDiagram
   participant User
   participant App
   participant Registry
-  participant Plugin
+  participant ImmediatePlugin
+  participant DebouncedPlugin
   participant Backend
 
   User->>App: Type query
   App->>Registry: getPluginsForQuery(query)
   Registry-->>App: matching plugins
-  App->>Plugin: getItems(query) with debounce/request guard
-  Plugin->>Backend: invoke(...) if needed
-  Backend-->>Plugin: data/result
-  Plugin-->>App: SearchResultItem[]
+  App->>App: split immediate vs debounced
+  App->>ImmediatePlugin: getItems(query) (no debounce, no loading indicator)
+  ImmediatePlugin-->>App: SearchResultItem[]
+  App->>DebouncedPlugin: getItems(query) after debounce delay
+  DebouncedPlugin->>Backend: invoke(...) if needed
+  Backend-->>DebouncedPlugin: data/result
+  DebouncedPlugin-->>App: SearchResultItem[]
+  App->>App: merge + deduplicate by id (first wins)
   App->>App: sort by score
   User->>App: Select item/action
-  App->>Plugin: onSelect/onRun
+  App->>ImmediatePlugin: onSelect/onRun
 ```
 
 ## AI chat with tool calling

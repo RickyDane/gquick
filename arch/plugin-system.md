@@ -25,15 +25,16 @@ interface GQuickPlugin {
 `src/plugins/index.ts` exports ordered plugin list:
 
 1. `appLauncherPlugin`
-2. `fileSearchPlugin`
-3. `calculatorPlugin`
-4. `dockerPlugin`
-5. `webSearchPlugin`
-6. `translatePlugin`
-7. `notesPlugin`
-8. `networkInfoPlugin`
-9. `speedtestPlugin`
-10. `weatherPlugin`
+2. `recentFilesPlugin`
+3. `fileSearchPlugin`
+4. `calculatorPlugin`
+5. `dockerPlugin`
+6. `webSearchPlugin`
+7. `translatePlugin`
+8. `notesPlugin`
+9. `networkInfoPlugin`
+10. `speedtestPlugin`
+11. `weatherPlugin`
 
 ## Routing
 
@@ -58,11 +59,13 @@ String prefixes are case-insensitive `startsWith`; regexp prefixes run against t
 
 1. User enters query in `App.tsx` search view.
 2. `getPluginsForQuery(query)` returns matching plugins or full registry.
-3. `App.tsx` launches plugin searches with per-plugin debounce (`getSearchDebounceMs`, `searchDebounceMs`, or default behavior).
-4. Results are guarded by request IDs to prevent stale async results from replacing newer query output.
-5. Results are flattened and sorted by `score` descending.
-6. Selection runs `onSelect`; secondary action overlay can run item `actions`.
-7. Plugin code may call Tauri commands via `invoke`, browser/HTTP APIs, local storage, clipboard APIs, or dispatch custom DOM events consumed by `App.tsx`.
+3. `App.tsx` splits plugins into **immediate** (no `searchDebounceMs` / `getSearchDebounceMs` configured) and **debounced** groups.
+4. Immediate plugins run silently without triggering the searching indicator.
+5. Debounced plugins run after their configured delay and do trigger the searching indicator / status text.
+6. Results from both groups are merged and **deduplicated by `id`** (first occurrence wins, so immediate results take priority over debounced ones).
+7. Final results are flattened and sorted by `score` descending.
+8. Selection runs `onSelect`; secondary action overlay can run item `actions`.
+9. Plugin code may call Tauri commands via `invoke`, browser/HTTP APIs, local storage, clipboard APIs, or dispatch custom DOM events consumed by `App.tsx`.
 
 ## Event conventions
 

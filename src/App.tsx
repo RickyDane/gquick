@@ -1125,7 +1125,16 @@ function App() {
       if (!isCurrentRequest()) return;
       const immediateItems = Array.from(immediateItemsByPlugin.values()).flat();
       const debouncedItems = Array.from(debouncedItemsByPlugin.values()).flat();
-      const nextItems = sortSearchResults([...immediateItems, ...debouncedItems]);
+
+      // Deduplicate by id, keeping first occurrence (immediate plugins win)
+      const seen = new Set<string>();
+      const deduped = [...immediateItems, ...debouncedItems].filter(item => {
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+      });
+
+      const nextItems = sortSearchResults(deduped);
 
       itemsRef.current = nextItems;
       setItems(nextItems);
@@ -1178,9 +1187,10 @@ function App() {
       }
     };
 
+    // Immediate plugins run silently without triggering the searching indicator.
+    // Only debounced (expensive) plugins show loading state.
     immediatePlugins.forEach(plugin => {
-      startPluginSearch(plugin.metadata.id);
-      void fetchImmediateItems(plugin).finally(endPluginSearch);
+      void fetchImmediateItems(plugin);
     });
 
     const timers = debouncedPlugins.map(plugin => {

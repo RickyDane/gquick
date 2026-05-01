@@ -82,6 +82,14 @@ export function getRecentItems(limit = RECENT_LIMIT): UsageEntry[] {
     .map((s) => s.entry);
 }
 
+export function getRecentItemsByPlugin(pluginId: string, limit = 5): UsageEntry[] {
+  const entries = loadEntries();
+  return entries
+    .filter((e) => e.pluginId === pluginId)
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit);
+}
+
 export function clearUsageHistory() {
   localStorage.removeItem(STORAGE_KEY);
 }

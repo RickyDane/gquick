@@ -5,6 +5,7 @@ Validated against `src/plugins/index.ts` and plugin source files.
 | Plugin | File | Query activation | Capabilities | Backend/API dependencies | AI tools |
 |---|---|---|---|---|---|
 | Applications | `appLauncher.tsx` | All queries | Cache app list, search by app name, launch selected app, display cached macOS icons when available | `list_apps`, `open_app` | No |
+| Recent Files | `recentFiles.tsx` | Query length >= 2 | Surfaces recently opened files/folders from usage history stored in localStorage; high score (200) so they rank above filesystem scan results | Frontend `usageTracker.ts` (`localStorage`) | No |
 | Files & Folders | `fileSearch.tsx` | Query length >= 2 | Runtime filename/folder search; smart search with AI ranking and safe content previews; open result | `launcher_search_files`, `search_files`, `smart_search_files`, `read_file`, `open_file`; selected AI provider for ranking | `search_files`, `read_file` |
 | Calculator | `calculator.tsx` | Math-looking expressions | Safe parser for `+ - * / ()` decimals; copy result and hide | Frontend only | `calculate` |
 | Docker | `docker.tsx` | `docker:` prefix only | Open Docker page; list/match local containers/images; container start/stop/restart/remove; image delete/pull; Docker Hub search | Docker Tauri commands; `src/utils/dockerHub.ts` | No |
@@ -20,6 +21,7 @@ Validated against `src/plugins/index.ts` and plugin source files.
 ```mermaid
 graph LR
   Registry[src/plugins/index.ts] --> AppLauncher
+  Registry --> RecentFiles
   Registry --> Files
   Registry --> Calculator
   Registry --> Docker
@@ -30,6 +32,7 @@ graph LR
   Registry --> Speedtest
   Registry --> Weather
 
+  RecentFiles --> UsageTracker[usageTracker.ts localStorage]
   Files --> FileCommands[Tauri file commands]
   Docker --> DockerCommands[Tauri Docker commands]
   Docker --> DockerHub[Docker Hub API]
@@ -43,6 +46,7 @@ graph LR
 
 ## Important capability boundaries
 
+- `recentFilesPlugin` is an immediate plugin (no debounce) that reads from `localStorage` usage history and ranks results above filesystem scans.
 - Docker is opt-in by prefix to avoid CLI/daemon latency on every launcher query.
 - Network info is cached for 45 seconds in frontend.
 - File search rejects hidden paths, symlinks, likely secrets/credentials/key files, directories for read, non-text/too-large files, and paths outside searchable roots.

@@ -3,6 +3,7 @@ import { calculatorPlugin } from "./calculator";
 import { dockerPlugin } from "./docker";
 import { webSearchPlugin } from "./webSearch";
 import { fileSearchPlugin } from "./fileSearch";
+import { recentFilesPlugin } from "./recentFiles";
 import { translatePlugin } from "./translate";
 import { notesPlugin } from "./notes";
 import { networkInfoPlugin } from "./networkInfo";
@@ -12,6 +13,7 @@ import { GQuickPlugin, QueryPrefixMatcher } from "./types";
 
 export const plugins: GQuickPlugin[] = [
   appLauncherPlugin,
+  recentFilesPlugin,
   fileSearchPlugin,
   calculatorPlugin,
   dockerPlugin,

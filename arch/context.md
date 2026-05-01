@@ -8,7 +8,7 @@ GQuick is a Tauri v2 + React 19 desktop productivity launcher. It provides keybo
 
 - Frontend: React/TypeScript single app routed by Tauri window label (`main` vs `selector`). `App.tsx` is the main state machine for search/chat/settings/actions/notes/docker.
 - Plugin layer: `src/plugins/index.ts` registry routes queries to `GQuickPlugin` implementations. Plugins return `SearchResultItem[]` with optional previews/actions and may expose AI tools.
-- AI layer: frontend calls OpenAI/Kimi/Gemini/Anthropic directly, streams responses, converts plugin tool schemas per provider, executes tool calls, then sends follow-up requests.
+- AI layer: frontend calls OpenAI, Gemini, and Anthropic directly from Settings-selected providers; Kimi/Moonshot code paths exist but are not exposed in Settings. It streams responses, converts plugin tool schemas per provider, executes tool calls, then sends follow-up requests.
 - Backend: `src-tauri/src/lib.rs` owns OS integration, global shortcuts, tray/window lifecycle, file/app search/open, screenshot/OCR, Docker CLI/Compose, SQLite notes, network info, dialogs, and terminal execution.
 - Persistence: SQLite notes in app data dir; frontend `localStorage` for settings, model/provider/API keys, weather/speedtest preferences.
 

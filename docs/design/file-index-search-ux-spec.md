@@ -1,4 +1,6 @@
-# UX Spec: Faster File/Folder Search + File Index Viewer
+# Archived UX Spec: Faster File/Folder Search + File Index Viewer
+
+> Historical design note. This spec describes an index-era file-search concept. Current GQuick file search uses runtime `jwalk` scanning with safe reads, and there is no File Index page in the live product.
 
 ## Overview
 Improve GQuick file/folder discovery while keeping current dark launcher feel: translucent `bg-zinc-900/95`, rounded panels, compact rows, blue/cyan accents, keyboard-first behavior. Scope is UX/spec only; no implementation details beyond user-facing behavior.

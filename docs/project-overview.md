@@ -16,10 +16,10 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
   - Windows: Start Menu `.lnk` files
   - Linux: `.desktop` files from `/usr/share/applications` and user data dir
 - **File Search** — Fast filename-based search across your home directory with keyword scoring
-- **Smart File Search** — AI-powered natural language file search that reads file contents and ranks results using your configured AI provider. Supports time filters (`today`, `last week`, `recent`, etc.)
+- **Smart File Search** — AI-powered natural language file search that reads file contents and ranks results on demand using your configured AI provider. Supports time filters (`today`, `last week`, `recent`, etc.)
 
 ### AI Chat (Fully Implemented)
-- **Real SSE streaming** to OpenAI, Google Gemini, Kimi/Moonshot, and Anthropic Claude
+- **Real SSE streaming** to OpenAI, Google Gemini, and Anthropic Claude
 - **Multi-turn conversation** with full history context
 - **Image inputs** — attach up to 5 images via paste, drag-and-drop, or native file dialog
 - **Markdown rendering** with code blocks, tables, lists, GFM support
@@ -31,7 +31,7 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
 
 ### Screen Capture & OCR
 - **Screenshot Capture** — `Alt+S` opens a fullscreen transparent selector; drag to capture a region, saved to `~/Desktop/gquick_capture.png`, copied to clipboard as image
-- **OCR Text Extraction** — `Alt+O` opens the same selector; extracts text via **Tesseract OCR** on macOS (Rust `tesseract` crate 0.15) or **AI vision models** on Windows/Linux (OpenAI, Gemini, Kimi, Anthropic), copies extracted text to clipboard
+- **OCR Text Extraction** — `Alt+O` opens the same selector; extracts text via **Tesseract OCR** on macOS (Rust `tesseract` crate 0.15) or **AI vision models** on Windows/Linux (OpenAI, Gemini, Anthropic), copies extracted text to clipboard
 
 ### Utilities
 - **Calculator** — type math expressions directly in the search bar (e.g. `2+2*5`); result copied to clipboard on Enter
@@ -69,7 +69,7 @@ GQuick is a cross-platform desktop productivity launcher built with **Tauri v2**
 | xcap | 0.9 | Screen capture |
 | image | 0.25 | Image processing / cropping |
 | tesseract | 0.15 | OCR text extraction (macOS only) |
-| AI Vision APIs | — | OCR via OpenAI/Gemini/Kimi/Anthropic (Windows/Linux) |
+| AI Vision APIs | — | OCR via OpenAI/Gemini/Anthropic (Windows/Linux) |
 | walkdir | 2 | File system traversal |
 | chrono | 0.4 | Date/time formatting |
 | dirs | 5 | Standard directory paths |
@@ -98,7 +98,7 @@ GQuick uses a **two-window architecture** sharing a single HTML entry point (`ma
 2. **`"selector"` window** — Fullscreen transparent overlay for drag-to-select region capture
 
 ### Plugin System
-6 plugins live in `src/plugins/`. Each implements:
+10 plugins live in `src/plugins/`. Each implements:
 
 ```typescript
 interface GQuickPlugin {
@@ -169,11 +169,11 @@ Built bundles appear in `src-tauri/target/release/bundle/`.
 
 1. **API keys stored in plaintext `localStorage`** — not secure; should migrate to Tauri secure storage or OS keychain
 2. **No persistent chat history** — conversations are lost when the app is closed
-3. **File index scope** — scans home directory only, max depth 6, skips hidden dirs and common build/cache folders
+3. **Runtime file search scope** — scans home directory only, max depth 6, skips hidden dirs and common build/cache folders
 4. **SQLite initialized but unused** — `tauri-plugin-sql` is included but no database tables are created or used
 5. **OCR language** — Tesseract on macOS uses English only (`eng`); AI vision OCR on Windows/Linux uses the model's multilingual capability with no explicit language control
 6. **macOS-only tessdata bundling** — on macOS, looks for `tessdata/` in app resource dir; Windows/Linux use AI APIs and do not need local tessdata
-7. **No search result caching** — every keystroke re-queries all plugins (though file index is cached 5 minutes)
+7. **No persistent file index** — every keystroke re-queries relevant plugins; runtime file search is recomputed on demand
 8. **Smart search token limits** — file content sent to AI is truncated to 5000 chars to stay within API limits
 
 ---
@@ -195,7 +195,7 @@ src/
     quickTranslate.ts      # Quick translate detection + API calls
     cn.ts                  # Tailwind class merge utility
   plugins/
-    index.ts               # Plugin registry (6 plugins)
+    index.ts               # Plugin registry (10 plugins)
     types.ts               # Plugin interfaces
     appLauncher.tsx        # Cross-platform app launcher
     fileSearch.tsx         # Fast + smart file search

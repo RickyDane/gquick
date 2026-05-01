@@ -1,5 +1,7 @@
 # GQuick Cross-Platform Audit — Findings
 
+> Historical audit. It predates the current runtime file-search and documentation updates, so some recommendations here are now stale.
+
 ## Executive Summary
 
 GQuick is a Tauri-based launcher/utility app currently **macOS-only**. While some areas are already cross-platform ready, critical functionality (app discovery, screen capture save paths, and some window behaviors) will break or behave incorrectly on Windows and Linux. This document details every issue found, its severity, and recommended fixes.
@@ -38,7 +40,7 @@ The `open_app` command (lines 740–763) **does** have cross-platform implementa
 
 ---
 
-## 2. File Operations (`open_file`, `build_file_index`, file search)
+## 2. File Operations (`open_file`, runtime file search)
 
 ### Status: ⚠️ PARTIAL
 
@@ -46,7 +48,7 @@ The `open_app` command (lines 740–763) **does** have cross-platform implementa
 
 `open_file` (lines 503–527) has platform-specific handlers for macOS, Windows, and Linux. ✅
 
-`build_file_index` (lines 261–308) has **partial** cross-platform support:
+`runtime file search` (lines 261–308) has **partial** cross-platform support:
 - Correctly uses `USERPROFILE` on Windows and `HOME` on Unix. ✅
 - **Issue**: Skip-dirs list includes macOS-specific names (`Caches`, `Library`, `.Trash`) but is missing Windows-specific noise dirs (`AppData`, `NTUSER.DAT*`, `Recent`, `SendTo`) and Linux-specific dirs (`.cache`, `.config` is already there). These extra dirs will bloat the index and slow search on Windows/Linux.
 - **Issue**: `max_depth(6)` from home may be too shallow on Windows where user documents are deeply nested (`C:\Users\<user>\OneDrive\Documents\...`).

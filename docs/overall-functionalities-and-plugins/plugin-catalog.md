@@ -72,8 +72,8 @@ Plugins may expose structured tools to AI chat through `src/utils/toolManager.ts
 | Tool | Plugin | Purpose |
 |---|---|---|
 | `calculate` | Calculator | Evaluate simple math expression |
-| `search_files` | Files & Folders | Search local indexed files/folders |
-| `read_file` | Files & Folders | Read a safe local text file from search results |
+| `search_files` | Files & Folders | Search local files/folders discovered by runtime scanning |
+| `read_file` | Files & Folders | Read a safe local text file from runtime search results |
 | `search_notes` | Notes | Search saved notes |
 | `create_note` | Notes | Save a new note |
 | `get_network_info` | Network Info | Return network status as JSON |

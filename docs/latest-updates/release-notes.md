@@ -1,5 +1,7 @@
 # Release Notes: GQuick v0.1.0 — AI-Powered Productivity Launcher
 
+> Historical snapshot of the early launch release. It is kept for reference and does not describe current plugin counts or provider exposure.
+
 ## Summary
 
 GQuick is a fully functional cross-platform desktop productivity launcher built with Tauri v2 and React 19. This release includes six search plugins, real AI chat with streaming and image support, local Tesseract OCR, screenshot capture, configurable global shortcuts, and a comprehensive settings panel — all accessible from a single keyboard-driven interface.

@@ -1,5 +1,7 @@
 # GQuick Cross-Platform Audit — Summary
 
+> Historical audit. It predates the current runtime file-search and documentation updates, so some recommendations here are now stale.
+
 ## Overview
 
 GQuick is a Tauri-based desktop launcher and utility app (screenshot, OCR, file search, AI chat, Docker management). It is currently **macOS-ready** but requires significant work to function correctly on **Windows** and **Linux**.
@@ -87,7 +89,7 @@ No `.desktop` file is provided for Linux packaging, so the app won't appear in t
 3. Implement Windows app discovery (Start Menu .lnk)
 4. Implement Linux app discovery (.desktop files)
 5. Bundle Tesseract on Windows / detect at runtime
-6. Tune file indexer for Windows/Linux
+6. Tune runtime file search for Windows/Linux
 7. Add Linux .desktop packaging
 8. Polish frontend shortcut labels
 9. Test on Windows 10/11 and major Linux distros

@@ -7,6 +7,7 @@ This directory is the user and developer documentation hub for current overall f
 
 ## Documents
 - [Plugin catalog](plugin-catalog.md): triggers, user actions, and AI tool support.
+- [How to build a simple plugin](simple-plugin-guide.md): quick start and detailed plan for new contributors.
 - [Setup and configuration](setup-configuration.md): AI providers, OCR, Docker, shortcuts, and local setup.
 - [Developer notes](developer-notes.md): how to add or update plugins and plugin tools.
 - [Limitations and security notes](limitations-security.md): known caveats documented in code and project context.
@@ -58,5 +59,5 @@ This directory is the user and developer documentation hub for current overall f
 
 ## Validation Notes
 - Current plugin registry includes 10 plugins: app launcher, file search, calculator, Docker, web search, translate, notes, network info, speedtest, and weather.
-- `docs/project-overview.md` and the root `README.md` are older and omit or understate some current plugins. Prefer this directory for current plugin coverage until those docs are refreshed.
-- Kimi/Moonshot code paths exist in streaming/tool conversion and some utilities, but Settings currently hides Kimi from the selectable provider list. Treat Kimi as code-supported but not currently exposed in the Settings UI unless re-enabled.
+- `docs/project-overview.md` and the root `README.md` now track the current plugin registry more closely, but this directory remains the detailed reference for plugin coverage and runtime file-search behavior.
+- Kimi/Moonshot code paths exist in streaming/tool conversion and some utilities, but Settings currently hides Kimi from the selectable provider list.

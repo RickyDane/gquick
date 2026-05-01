@@ -8,7 +8,7 @@ GQuick is a cross-platform desktop productivity launcher built with Tauri v2 (Ru
 
 GQuick uses a Tauri architecture with a React main webview (`App.tsx`) and a fullscreen selector webview (`Selector.tsx`). The Rust backend (`src-tauri/src/lib.rs`) owns global shortcuts, tray/window/focus behavior, OS-level integrations, SQLite notes, Docker CLI operations, screenshot/OCR capture, file/app search/open, dialogs, network info, and terminal execution.
 
-Frontend search is plugin-based. `src/plugins/index.ts` maintains the registry and routes explicit query prefixes to matching plugins; otherwise the launcher runs the registry and sorts `SearchResultItem` results by score. AI chat calls OpenAI/Kimi/Gemini/Anthropic from the frontend, streams responses, converts plugin tool schemas through `src/utils/toolManager.ts`, executes tool calls through plugins, appends tool results, and sends follow-up requests.
+Frontend search is plugin-based. `src/plugins/index.ts` maintains the registry and routes explicit query prefixes to matching plugins; otherwise the launcher runs the registry and sorts `SearchResultItem` results by score. AI chat calls OpenAI, Google Gemini, and Anthropic directly from the frontend; Kimi/Moonshot code paths exist but are not exposed in Settings. It streams responses, converts plugin tool schemas through `src/utils/toolManager.ts`, executes tool calls through plugins, appends tool results, and sends follow-up requests.
 
 ```mermaid
 graph TB
@@ -25,7 +25,7 @@ graph TB
   Rust --> SQLite[(SQLite notes)]
   Rust --> Docker[Docker CLI]
   Rust --> OS[OS apps/files/screen/clipboard/network]
-  Chat --> AI[OpenAI/Kimi/Gemini/Anthropic]
+  Chat --> AI[OpenAI/Gemini/Anthropic]
 ```
 
 ## Key Components
@@ -35,7 +35,7 @@ graph TB
 - `src/Settings.tsx`: API provider/model/key, global shortcut, and saved location configuration.
 - `src/plugins/*`: plugin implementations returning search results/actions/previews; some expose AI tools.
 - `src/utils/toolManager.ts`: discovers plugin tools, converts schemas/messages per provider, dispatches tool execution.
-- `src/utils/streaming.ts`: SSE streaming for OpenAI/Kimi/Gemini/Anthropic plus tool-call accumulation.
+- `src/utils/streaming.ts`: SSE streaming for OpenAI/Gemini/Anthropic plus tool-call accumulation.
 - `src/utils/location.ts`: reads/writes saved location from `localStorage` for weather and other location-aware plugins.
 - `src/components/NotesView.tsx`: CRUD notes manager.
 - `src/components/DockerView.tsx`: Docker management UI for status, containers, images, Hub, logs, exec, inspect, prune, Compose.
@@ -72,7 +72,7 @@ Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `cre
 - Frontend: React 19.1, TypeScript 5.8, Vite 7, Tailwind CSS 4, lucide-react, react-markdown + remark-gfm.
 - Backend: Tauri 2, Rust, xcap, image, rusqlite bundled SQLite, jwalk/walkdir, rayon, reqwest, tesseract on macOS, unicode-normalization.
 - Tauri plugins: opener, clipboard-manager, global-shortcut, dialog.
-- External APIs: OpenAI, Moonshot/Kimi, Google Gemini, Anthropic Claude, Open-Meteo, Cloudflare speed test, Docker Hub, api.ipify.org.
+- External APIs: OpenAI, Google Gemini, Anthropic Claude, with Moonshot/Kimi code-path support, plus Open-Meteo, Cloudflare speed test, Docker Hub, and api.ipify.org.
 
 ## Conventions
 

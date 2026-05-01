@@ -32,7 +32,7 @@ graph TB
     Rust --> ShortMgr[shortcut/window/focus management]
   end
 
-  Chat --> Providers[OpenAI/Kimi/Gemini/Anthropic]
+  Chat --> Providers[OpenAI/Gemini/Anthropic]
   Plugins --> WebAPIs[Open-Meteo, Cloudflare speed test, Google search URL]
   Docker --> DockerCLI[Docker CLI/daemon]
   Capture --> OS[Screen, clipboard, OCR]
@@ -57,6 +57,7 @@ flowchart LR
 ## Key corrections from validation
 
 - Plugin tool manager lives at `src/utils/toolManager.ts`, not `src/plugins/toolManager.ts`.
+- Settings currently exposes OpenAI, Google Gemini, and Anthropic; Kimi/Moonshot code paths remain hidden.
 - Current plugin registry includes `speedtestPlugin`; older docs omitted it.
 - Docker plugin no longer exposes AI tools in current code. Docker search/actions are UI/plugin-driven and backed by Rust commands plus frontend Docker Hub search.
 - Web Search plugin does not expose an AI tool. OpenAI hosted web search support is handled in `App.tsx`/streaming for supported OpenAI Responses models.

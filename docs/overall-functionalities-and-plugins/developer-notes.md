@@ -65,7 +65,7 @@ Tool conversion is provider-specific:
 ## Safety Patterns to Preserve
 - Do not run slow plugins for every keystroke without a prefix or debounce.
 - Ask for confirmation before destructive Docker operations.
-- Keep local file reads restricted to safe indexed text files.
+- Keep local file reads restricted to safe text files returned by runtime search results.
 - Reject hidden paths, symlinks, likely secrets, credentials, key files, directories, and non-regular files in AI file reads.
 - Cap read sizes and result counts.
 - Treat AI output as assistive and user-verified.

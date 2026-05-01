@@ -1,5 +1,7 @@
 feat(app): implement full productivity launcher with AI chat, OCR, and 6 plugins
 
+Historical commit-message draft for the early launch snapshot.
+
 Add complete desktop productivity launcher with Tauri v2 backend and React 19 frontend.
 
 Features implemented:

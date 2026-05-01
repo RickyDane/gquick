@@ -25,7 +25,7 @@
 
 ## Product Limitations
 - Chat history is not documented as persistently stored; current context notes no persistent chat history.
-- Some older docs are stale: plugin counts and feature status in `README.md` and `docs/project-overview.md` do not fully match current plugin registry.
+- Some historical docs still describe index-era or launch-era behavior. Prefer current overview docs for plugin counts and runtime file-search details.
 - Kimi/Moonshot has code paths but is not currently selectable in Settings.
 - Docker requires Docker CLI/daemon; Docker Hub search requires network access.
 - Speedtest results depend on Cloudflare endpoint availability, CORS behavior, and current network conditions.
@@ -33,5 +33,5 @@
 ## Gaps Needing Reverse-Engineer Follow-up
 - Confirm exact packaged OCR behavior and tessdata bundling for non-development macOS builds.
 - Confirm current Tauri allowlist/CSP implications for all external endpoints.
-- Refresh architecture docs to include weather, speedtest, Docker view expansion, and current plugin tool set.
+- Keep archived docs clearly labeled when they describe removed or historical flows.
 - Reconcile provider documentation around Kimi/Moonshot with current Settings UI.

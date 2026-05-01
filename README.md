@@ -20,6 +20,7 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 - [Usage](#usage)
 - [Architecture](#architecture)
 - [Plugin System](#plugin-system)
+- [How to Build a Simple Plugin](docs/overall-functionalities-and-plugins/simple-plugin-guide.md)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Development](#development)
 - [Building from Source](#building-from-source)
@@ -157,26 +158,26 @@ Press `Ctrl/Cmd+,` to open settings where you can:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        FRONTEND (React 19)                  │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────────────┐  │
-│  │  App    │  │ Selector│  │Settings │  │ Plugin System  │  │
-│  │(Search  │  │(Region  │  │(Config) │  │ 10 Plugins     │  │
-│  │ + Chat) │  │ Capture)│  │         │  │                │  │
-│  └─────────┘  └─────────┘  └─────────┘  └────────────────┘  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ Tauri Commands / Events
-┌──────────────────────────┴──────────────────────────────────┐
-│                      BACKEND (Rust)                         │
-│  ┌─────────┐  ┌─────────┐  ┌─────────────────────────────┐  │
-│  │App Mgmt │  │ Capture │  │   Global Shortcuts          │  │
-│  │File Idx │  │  OCR    │  │   Window / Tray / Clipboard │  │
-│  └─────────┘  └─────────┘  └─────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         FRONTEND (React 19)                  │
+│  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌────────────────┐  │
+│  │  App    │  │ Selector │  │Settings │  │ Plugin System  │  │
+│  │(Search  │  │ (Region  │  │(Config) │  │ 10 Plugins     │  │
+│  │ + Chat) │  │ Capture) │  │         │  │                │  │
+│  └─────────┘  └──────────┘  └─────────┘  └────────────────┘  │
+└────────────────────────────┬─────────────────────────────────┘
+                             │ Tauri Commands / Events
+┌────────────────────────────┴──────────────────────────────────┐
+│                        BACKEND (Rust)                         │
+│  ┌───────────┐  ┌─────────┐  ┌─────────────────────────────┐  │
+│  │App Mgmt   │  │ Capture │  │   Global Shortcuts          │  │
+│  │File Search│  │  OCR    │  │   Window / Tray / Clipboard │  │
+│  └───────────┘  └─────────┘  └─────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 GQuick uses **Tauri 2.0** architecture with a clear separation between:
-- **Rust Backend** — System integration, screen capture, shortcuts, system tray, file indexing
+- **Rust Backend** — System integration, screen capture, shortcuts, system tray, runtime file search, and terminal helpers
 - **React Frontend** — UI rendering, plugin system, settings, chat interface
 
 ### Key Design Decisions
@@ -219,6 +220,7 @@ interface GQuickPlugin {
 1. Create a new file in `src/plugins/myPlugin.tsx`
 2. Implement the `GQuickPlugin` interface
 3. Register it in `src/plugins/index.ts`
+4. See [How to Build a Simple Plugin](docs/overall-functionalities-and-plugins/simple-plugin-guide.md) for a fuller quick start and checklist
 
 Example:
 
@@ -344,7 +346,7 @@ For local testing without code signing:
 CODESIGN_IDENTITY=- npm run tauri build
 ```
 
-For distribution, you'll need an **Apple Developer ID** certificate. See [Code Signing Guide](docs/code-signing.md) for details.
+For distribution, you'll need an **Apple Developer ID** certificate. See [Code Signing Guide](docs/macos-code-signing/setup.md) for details.
 
 ---
 
@@ -367,15 +369,6 @@ The workflow (`.github/workflows/build.yml`) triggers on:
 | `windows-latest` | `x86_64-pc-windows-msvc` | `.msi`, `.exe` |
 | `macos-latest` | `aarch64-apple-darwin` | `.dmg` (Apple Silicon) |
 | `macos-13` | `x86_64-apple-darwin` | `.dmg` (Intel) |
-
-### Creating a Release
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-This will automatically create a **draft** release with all platform builds.
 
 ---
 

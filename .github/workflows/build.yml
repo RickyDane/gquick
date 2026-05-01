@@ -37,6 +37,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create version tag
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "VERSION=${TAG}" >> "$GITHUB_OUTPUT"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release ${TAG}"
+            git push origin "$TAG"
+            echo "Created and pushed tag ${TAG}"
+          fi
+        id: create_tag
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -318,7 +337,7 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          draft: false
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
           name: GQuick ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}

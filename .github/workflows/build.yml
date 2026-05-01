@@ -42,6 +42,7 @@ jobs:
 
       - name: Create version tag
         if: github.event_name == 'push' && github.ref_type == 'branch'
+        shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"

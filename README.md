@@ -1,6 +1,5 @@
 # GQuick
 
-[![Build Status](https://github.com/rickyperlick/gquick/actions/workflows/build.yml/badge.svg)](https://github.com/rickyperlick/gquick/actions/workflows/build.yml)
 [![Tauri v2](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri)](https://tauri.app)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust)](https://www.rust-lang.org)
@@ -42,25 +41,32 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 
 ### Tools & Utilities
 - **Calculator** — Evaluate mathematical expressions directly in the search bar
-- **Docker Manager** — List, start, stop, and remove Docker containers and images
+- **Docker Manager** — List, start, stop, and remove Docker containers and images, search Docker Hub, manage Compose projects
 - **Web Search** — Quick Google searches opened in your default browser
-- **Quick Translate** — Instant text translation powered by AI
+- **Quick Translate** — Instant text translation powered by AI. Type `t: <text>` or `tr: <text>` for instant translation without opening the full UI
+- **Weather** — Current conditions and 7-day forecast powered by Open-Meteo. Type `/wt <city>` or `weather:` to search locations
+- **Speedtest** — Measure latency, download, and upload speed via Cloudflare endpoints. Type `speedtest` or `/st`
+- **Network Info** — View local IP, public IP, Wi-Fi SSID, VPN status, and latency. Type `net:`, `network:`, `wifi`, or `vpn`
+- **Notes** — Quick note capture with `note: <content>`, search notes with `search notes: <query>`, and browse all notes in a dedicated view
+- **Terminal Commands** — Run shell commands directly from the launcher. Type `> <command>` to execute inline or in an external terminal
+- **URL Recognition** — Type any URL (e.g., `example.com`, `localhost:3000`) to open it directly in your default browser
 
 ### Screen Capture & OCR
 - **Screenshot Capture** — Select any screen region with `Alt+S`
 - **OCR (Text Extraction)** — Extract text from any screen region with `Alt+O`
   - macOS: Powered by [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
-  - Windows/Linux: Powered by AI vision models (OpenAI, Gemini, Kimi, Anthropic)
+  - Windows/Linux: Powered by AI vision models (OpenAI, Gemini, Anthropic)
   - Automatically copies extracted text to clipboard
 
-### AI Chat
+### Chat & AI
 - **Multi-Provider Support** — Connect to your preferred AI provider:
   - OpenAI (GPT-4, GPT-4o, etc.)
   - Google Gemini
-  - Kimi / Moonshot
   - Anthropic Claude
 - **Streaming Responses** — Real-time streaming for a smooth chat experience
 - **Model Selection** — Fetch and select from available models per provider
+- **Tool Use** — AI can invoke plugins as tools (weather, notes, network info, web search, calculations, file search)
+- **Image Upload** — Paste or attach images in chat for vision model analysis (up to 5 images, 5 MB each)
 
 ### System Integration
 - **Global Hotkeys** — Invoke from anywhere with system-wide shortcuts
@@ -104,20 +110,47 @@ See [Building from Source](#building-from-source) below.
 3. Type to search across all plugins
 4. Use `↑` / `↓` to navigate results, `Enter` to select
 
+### Terminal Commands
+
+Type `> <command>` to run shell commands directly from the launcher:
+- **Enter** — Opens the command in your default terminal
+- **Left Shift + Enter** — Runs the command inline (non-interactive commands only)
+
+### Quick Note & Note Search
+
+- Type `note: <your note>` to quickly save a note
+- Type `search notes: <query>` to search your saved notes
+- Press `Ctrl/Cmd+N` to open the Notes view
+
+### Quick Translate
+
+Type `t: <text>` or `tr: <text>` for instant AI translation without opening the full translate UI. The language is auto-detected and translates English ↔ German by default.
+
+### URL Recognition
+
+Type any URL directly into the search bar to open it:
+- `example.com` or `www.example.com`
+- `https://example.com`
+- `localhost:3000` or `127.0.0.1:8080`
+
 ### Actions Overlay
 
 Press `Ctrl/Cmd+K` to open the actions overlay for quick access to:
 - Chat mode
+- Notes
+- Docker view
 - Settings
 - Individual plugins
 
 ### Settings
 
 Press `Ctrl/Cmd+,` to open settings where you can:
-- Configure your global shortcut
+- Configure your global shortcut (toggle launcher, screenshot, OCR)
+- Set up local shortcuts (quick note, search notes)
 - Set up AI provider API keys
 - Select your preferred AI model
-- Configure OCR settings
+- Choose UI layout (default or compact)
+- Set your default location for weather forecasts
 
 ---
 
@@ -128,7 +161,7 @@ Press `Ctrl/Cmd+,` to open settings where you can:
 │                        FRONTEND (React 19)                  │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────────────┐  │
 │  │  App    │  │ Selector│  │Settings │  │ Plugin System  │  │
-│  │(Search  │  │(Region  │  │(Config) │  │ 7 Plugins      │  │
+│  │(Search  │  │(Region  │  │(Config) │  │ 10 Plugins     │  │
 │  │ + Chat) │  │ Capture)│  │         │  │                │  │
 │  └─────────┘  └─────────┘  └─────────┘  └────────────────┘  │
 └──────────────────────────┬──────────────────────────────────┘
@@ -168,14 +201,18 @@ interface GQuickPlugin {
 
 ### Built-in Plugins
 
-| Plugin | ID | Description | Trigger Keywords |
-|--------|-----|-------------|-----------------|
+| Plugin | ID | Description | Trigger Keywords / Prefixes |
+|--------|-----|-------------|---------------------------|
 | App Launcher | `app-launcher` | Launch applications | `open`, `launch`, `app` |
 | File Search | `file-search` | Find files and folders | `file`, `folder`, `find` |
 | Calculator | `calculator` | Math expression evaluator | N/A (auto-detected) |
-| Docker | `docker` | Container/image management | `docker` |
-| Web Search | `web-search` | Google search | `google`, `search`, `web` |
-| Translate | `translate` | Quick translation | `translate`, `tr` |
+| Docker | `docker` | Container/image management | `docker:` |
+| Web Search | `web-search` | Google search | `search:`, `google`, `search`, `web` |
+| Translate | `translate` | AI-powered translation | `translate:`, `/translate`, `t:`, `tr:` |
+| Notes | `notes` | Quick notes and search | `note:`, `search notes:`, `notes:` |
+| Weather | `weather` | Forecast and current conditions | `/wt`, `weather:`, `weather`, `forecast` |
+| Speedtest | `speedtest` | Internet speed test | `speedtest`, `speed test`, `/st` |
+| Network Info | `network-info` | IP, Wi-Fi, VPN, latency | `net:`, `network:`, `wifi`, `vpn` |
 
 ### Creating a Custom Plugin
 
@@ -219,10 +256,16 @@ export const myPlugin: GQuickPlugin = {
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl/Cmd+K` | Toggle actions overlay |
-| `Ctrl/Cmd+C` | Switch to chat view |
+| `Ctrl/Cmd+Shift+C` | Switch to chat view |
+| `Ctrl/Cmd+N` | Open Notes view |
+| `Ctrl/Cmd+Shift+D` | Open Docker view |
+| `Ctrl/Cmd+Shift+N` | Quick Note (prefills `note:` in search) |
+| `Ctrl/Cmd+Shift+S` | Search Notes (prefills `search notes:` in search) |
 | `Ctrl/Cmd+,` | Open settings |
+| `Ctrl/Cmd+R` | Reset chat (chat view only) |
 | `↑` / `↓` | Navigate results |
 | `Enter` | Select highlighted item |
+| `Left Shift + Enter` | Run terminal command inline (when command is typed) |
 | `Escape` | Hide window / go back |
 
 ---

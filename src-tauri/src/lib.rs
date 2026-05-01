@@ -676,7 +676,7 @@ struct AppsCacheState {
     last_updated: Mutex<Instant>,
 }
 
-const APPS_CACHE_TTL: Duration = Duration::from_secs(30);
+const APPS_CACHE_TTL: Duration = Duration::from_secs(5);
 
 const DEFAULT_FILE_SEARCH_MAX_DEPTH: usize = 12;
 const MIN_FILE_SEARCH_MAX_DEPTH: usize = 6;

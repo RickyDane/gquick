@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AppWindow } from "lucide-react";
 import { GQuickPlugin, SearchResultItem } from "./types";
 
@@ -7,6 +8,8 @@ interface AppInfo {
   path: string;
   icon?: string;
 }
+
+let appLaunchInFlight = false;
 
 export const appLauncherPlugin: GQuickPlugin = {
   metadata: {
@@ -42,10 +45,36 @@ export const appLauncherPlugin: GQuickPlugin = {
         icon: app.icon ? convertFileSrc(app.icon) : AppWindow,
         score,
         onSelect: async () => {
+          if (appLaunchInFlight) {
+            return;
+          }
+
+          appLaunchInFlight = true;
+          const window = getCurrentWindow();
+          const hidePromise = window.hide();
+          const launchPromise = invoke("open_app", { path: app.path });
+
+          void Promise.allSettled([hidePromise, launchPromise]).then(() => {
+            appLaunchInFlight = false;
+          });
+
           try {
-            await invoke("open_app", { path: app.path });
+            await launchPromise;
           } catch (e) {
             console.error(e);
+
+            try {
+              await hidePromise;
+            } catch (hideError) {
+              console.error(hideError);
+            }
+
+            try {
+              await window.show();
+              await window.setFocus();
+            } catch (showError) {
+              console.error(showError);
+            }
           }
         },
       };

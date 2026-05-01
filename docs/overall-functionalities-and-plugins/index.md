@@ -38,7 +38,7 @@ This directory is the user and developer documentation hub for current overall f
 - **Calculator**: safe arithmetic parser for simple expressions.
 - **Web search**: opens Google results in the default browser.
 - **Weather**: saves a weather location and shows current weather plus forecast using Open-Meteo.
-- **Network info**: copies local/public IP, Wi-Fi, VPN, and latency summary.
+- **Network info**: copies local/public IP, Wi-Fi, and latency summary.
 - **Speedtest**: checks latency, download, and upload with Cloudflare speed endpoints.
 
 ## Common Shortcuts

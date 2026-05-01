@@ -1997,10 +1997,13 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "core-graphics",
  "dirs 5.0.1",
  "image",
  "jwalk",
  "libc",
+ "objc2",
+ "objc2-foundation",
  "rayon",
  "reqwest 0.12.28",
  "rusqlite",

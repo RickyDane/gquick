@@ -102,7 +102,7 @@ Important command DTOs returned by Rust:
 - `AppInfo`: `{ name, path, icon? }`
 - `FileInfo`: `{ name, path, is_dir }`
 - `SmartFileInfo`: `{ name, path, is_dir, created?, modified?, size, content_preview?, full_content? }`
-- `NetworkInfo`: `{ localIp, publicIp, ssid, vpn, latency }`
+- `NetworkInfo`: `{ localIp, publicIp, ssid, latency }`
 - `ContainerInfo`: `{ id, image, status, names, ports, state, created_at }`
 - `ImageInfo`: `{ id, repository, tag, size, created_since }`
 - `DockerStatus`: CLI installed, daemon running, Docker/Compose version fields, optional error fields.

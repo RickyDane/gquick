@@ -47,7 +47,7 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 - **Quick Translate** — Instant text translation powered by AI. Type `t: <text>` or `tr: <text>` for instant translation without opening the full UI
 - **Weather** — Current conditions and 7-day forecast powered by Open-Meteo. Type `/wt <city>` or `weather:` to search locations
 - **Speedtest** — Measure latency, download, and upload speed via Cloudflare endpoints. Type `speedtest` or `/st`
-- **Network Info** — View local IP, public IP, Wi-Fi SSID, VPN status, and latency. Type `net:`, `network:`, `wifi`, or `vpn`
+- **Network Info** — View local IP, public IP, Wi-Fi SSID, and latency. Type `net:`, `network:`, or `wifi`
 - **Notes** — Quick note capture with `note: <content>`, search notes with `search notes: <query>`, and browse all notes in a dedicated view
 - **Terminal Commands** — Run shell commands directly from the launcher. Type `> <command>` to execute inline or in an external terminal
 - **URL Recognition** — Type any URL (e.g., `example.com`, `localhost:3000`) to open it directly in your default browser
@@ -213,7 +213,7 @@ interface GQuickPlugin {
 | Notes | `notes` | Quick notes and search | `note:`, `search notes:`, `notes:` |
 | Weather | `weather` | Forecast and current conditions | `/wt`, `weather:`, `weather`, `forecast` |
 | Speedtest | `speedtest` | Internet speed test | `speedtest`, `speed test`, `/st` |
-| Network Info | `network-info` | IP, Wi-Fi, VPN, latency | `net:`, `network:`, `wifi`, `vpn` |
+| Network Info | `network-info` | IP, Wi-Fi, latency | `net:`, `network:`, `wifi` |
 
 ### Creating a Custom Plugin
 

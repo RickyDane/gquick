@@ -1,4 +1,6 @@
 use base64::Engine;
+#[cfg(target_os = "macos")]
+use std::cell::RefCell;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -11,6 +13,96 @@ use tauri_plugin_global_shortcut::{
 use tauri_plugin_opener::OpenerExt;
 #[cfg(target_os = "macos")]
 use tesseract::Tesseract;
+
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+
+#[cfg(target_os = "macos")]
+use objc2::{class, extern_class, extern_methods, msg_send, sel};
+
+#[cfg(target_os = "macos")]
+use objc2::runtime::NSObject;
+
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSString;
+
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreWLAN", kind = "framework")]
+extern "C" {}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreLocation", kind = "framework")]
+extern "C" {}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn pthread_main_np() -> i32;
+}
+
+#[cfg(target_os = "macos")]
+extern_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "CWWiFiClient"]
+    pub struct CWWiFiClient;
+);
+
+#[cfg(target_os = "macos")]
+extern_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "CWInterface"]
+    pub struct CWInterface;
+);
+
+#[cfg(target_os = "macos")]
+extern_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "CLLocationManager"]
+    pub struct CLLocationManager;
+);
+
+#[cfg(target_os = "macos")]
+#[allow(non_snake_case)]
+impl CWWiFiClient {
+    extern_methods!(
+        #[unsafe(method(sharedWiFiClient))]
+        pub fn sharedWiFiClient() -> Retained<CWWiFiClient>;
+
+        #[unsafe(method(interface))]
+        pub fn interface(&self) -> Option<Retained<CWInterface>>;
+    );
+}
+
+#[cfg(target_os = "macos")]
+impl CWInterface {
+    extern_methods!(
+        #[unsafe(method(ssid))]
+        pub fn ssid(&self) -> Option<Retained<NSString>>;
+    );
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static WIFI_LOCATION_MANAGER: RefCell<Option<Retained<CLLocationManager>>> = const { RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn with_macos_location_manager<F, R>(f: F) -> R
+where
+    F: FnOnce(&Retained<CLLocationManager>) -> R,
+{
+    WIFI_LOCATION_MANAGER.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.is_none() {
+            let manager: Retained<CLLocationManager> = unsafe { msg_send![class!(CLLocationManager), new] };
+            *cell = Some(manager);
+        }
+
+        f(cell.as_ref().unwrap())
+    })
+}
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
@@ -491,7 +583,7 @@ struct NetworkInfo {
     local_ip: String,
     public_ip: String,
     ssid: String,
-    vpn: String,
+    wifi_permission_state: String,
     latency: String,
 }
 
@@ -1755,10 +1847,14 @@ async fn web_search(query: String) -> Result<Vec<WebSearchResult>, String> {
         .map_err(|e| format!("Failed to read web search response: {e}"))?;
 
     let document = scraper::Html::parse_document(&html);
-    let result_selector = scraper::Selector::parse(".result").map_err(|_| "Failed to parse result selector".to_string())?;
-    let title_selector = scraper::Selector::parse(".result__title > a").map_err(|_| "Failed to parse title selector".to_string())?;
-    let url_selector = scraper::Selector::parse(".result__url").map_err(|_| "Failed to parse URL selector".to_string())?;
-    let snippet_selector = scraper::Selector::parse(".result__snippet").map_err(|_| "Failed to parse snippet selector".to_string())?;
+    let result_selector = scraper::Selector::parse(".result")
+        .map_err(|_| "Failed to parse result selector".to_string())?;
+    let title_selector = scraper::Selector::parse(".result__title > a")
+        .map_err(|_| "Failed to parse title selector".to_string())?;
+    let url_selector = scraper::Selector::parse(".result__url")
+        .map_err(|_| "Failed to parse URL selector".to_string())?;
+    let snippet_selector = scraper::Selector::parse(".result__snippet")
+        .map_err(|_| "Failed to parse snippet selector".to_string())?;
 
     let mut results = Vec::new();
 
@@ -2196,19 +2292,411 @@ fn parse_macos_default_interface(route_output: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn parse_macos_wifi_ssid(output: &str) -> Option<String> {
-    let ssid = output
-        .trim()
-        .strip_prefix("Current Wi-Fi Network:")
-        .map(str::trim)
-        .unwrap_or_else(|| output.trim());
+fn parse_macos_wifi_ssid_value(value: &str) -> Option<String> {
+    let ssid = value.trim();
     let lower = ssid.to_lowercase();
 
     (!ssid.is_empty()
+        && !is_redacted_ssid(ssid)
         && !lower.contains("not associated")
         && !lower.contains("could not find")
-        && !lower.contains("error"))
+        && !lower.contains("error")
+        && !lower.contains("inactive")
+        && !lower.contains("unsupported"))
     .then_some(ssid.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn is_redacted_ssid(value: &str) -> bool {
+    let normalized = value.trim().trim_matches(['"', '\'']);
+    let lower = normalized.to_lowercase();
+
+    normalized.is_empty()
+        || lower == "<redacted>"
+        || lower == "redacted"
+        || lower == "unavailable"
+        || lower == "unknown"
+        || lower.contains("redacted")
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_wifi_ssid(output: &str) -> Option<String> {
+    let trimmed = output.trim();
+
+    if let Some(ssid) = trimmed.strip_prefix("Current Wi-Fi Network:") {
+        return parse_macos_wifi_ssid_value(ssid);
+    }
+
+    trimmed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Current Wi-Fi Network:").and_then(parse_macos_wifi_ssid_value))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_summary_field(line: &str, label: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix(label)?;
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix(':')?.trim();
+    parse_macos_wifi_ssid_value(rest)
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_ipconfig_summary_ssid(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        parse_macos_summary_field(line, "SSID")
+            .or_else(|| parse_macos_summary_field(line, "NetworkID"))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn detect_macos_wifi_ssid_native() -> Option<String> {
+    let authorized = macos_location_authorized();
+    if !authorized {
+        return None;
+    }
+
+    let client = CWWiFiClient::sharedWiFiClient();
+    let interface = client.interface()?;
+    let ssid = interface.ssid()?;
+    parse_macos_wifi_ssid_value(&ssid.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_location_services_enabled() -> bool {
+    unsafe { msg_send![class!(CLLocationManager), locationServicesEnabled] }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_location_authorization_status() -> isize {
+    unsafe { msg_send![class!(CLLocationManager), authorizationStatus] }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_location_authorized() -> bool {
+    matches!(
+        macos_location_authorization_status(),
+        3 | 4
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn request_macos_location_permission_if_needed() {
+    if !macos_location_services_enabled() || macos_location_authorization_status() != 0 {
+        return;
+    }
+
+    with_macos_location_manager(|manager| {
+        unsafe {
+            if pthread_main_np() != 0 {
+                let _: () = msg_send![&**manager, requestWhenInUseAuthorization];
+            } else {
+                let _: () = msg_send![&**manager,
+                    performSelectorOnMainThread: sel!(requestWhenInUseAuthorization),
+                    withObject: std::ptr::null_mut::<c_void>(),
+                    waitUntilDone: true
+                ];
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn macos_wifi_permission_needed_message() -> String {
+    "Wi-Fi Permission needed".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_wifi_permission_state() -> &'static str {
+    if !macos_location_services_enabled() {
+        return "disabled";
+    }
+
+    match macos_location_authorization_status() {
+        3 | 4 => "granted",
+        0 => "needed",
+        1 | 2 => "denied",
+        _ => "unknown",
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_location_settings() -> Result<(), String> {
+    let status = Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")
+        .status()
+        .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Failed to open System Settings".to_string())
+    }
+}
+
+#[tauri::command]
+fn request_wifi_permission() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let prompted = macos_location_authorization_status() == 0;
+        request_macos_location_permission_if_needed();
+
+        if !prompted && !macos_location_authorized() {
+            let _ = open_macos_location_settings();
+        }
+
+        return Ok(if prompted {
+            "prompted".to_string()
+        } else {
+            macos_wifi_permission_state().to_string()
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("not-applicable".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_wifi_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        open_macos_location_settings()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
+/// Detect Wi-Fi SSID by finding the actual Wi-Fi interface, not the default route.
+/// Wi-Fi can be connected but not be the default route (e.g. Ethernet is default).
+#[cfg(target_os = "macos")]
+fn detect_macos_wifi_ssid(timeout: Duration) -> Option<String> {
+    if !macos_location_authorized() {
+        return None;
+    }
+
+    // Strategy 1: Native CoreWLAN API. Avoids command-line redaction.
+    if let Some(ssid) = detect_macos_wifi_ssid_native() {
+        return Some(ssid);
+    }
+
+    // Strategy 2: Fast path from ipconfig summary on actual Wi-Fi device.
+    if let Some(wifi_device) = find_macos_wifi_device(timeout) {
+        if let Some(output) = command_stdout("ipconfig", &["getsummary", &wifi_device], timeout) {
+            if let Some(ssid) = parse_macos_ipconfig_summary_ssid(&output) {
+                return Some(ssid);
+            }
+        }
+    }
+
+    // Strategy 3: Parse SSID from system_profiler AirPort data.
+    if let Some(output) = shell_stdout("system_profiler SPAirPortDataType 2>/dev/null", timeout) {
+        if let Some(ssid) = parse_system_profiler_ssid(&output) {
+            return Some(ssid);
+        }
+    }
+
+    // Strategy 4: Resolve Wi-Fi service name, then query service.
+    if let Some(service_name) = find_macos_wifi_service_name(timeout) {
+        if let Some(output) =
+            command_stdout("networksetup", &["-getairportnetwork", &service_name], timeout)
+        {
+            if let Some(ssid) = parse_macos_wifi_ssid(&output) {
+                return Some(ssid);
+            }
+        }
+    }
+
+    // Strategy 5: Try wdutil / airport.
+    if let Some(output) = shell_stdout("wdutil info 2>/dev/null", timeout) {
+        if let Some(ssid) = parse_wifi_tool_ssid(&output) {
+            return Some(ssid);
+        }
+    }
+
+    if let Some(output) = command_stdout(
+        "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport",
+        &["-I"],
+        timeout,
+    ) {
+        if let Some(ssid) = parse_wifi_tool_ssid(&output) {
+            return Some(ssid);
+        }
+    }
+
+    None
+}
+
+/// Find Wi-Fi service name by mapping `networksetup -listnetworkserviceorder` to Wi-Fi device.
+#[cfg(target_os = "macos")]
+fn find_macos_wifi_service_name(timeout: Duration) -> Option<String> {
+    let wifi_device = find_macos_wifi_device(timeout)?;
+    let output = command_stdout("networksetup", &["-listnetworkserviceorder"], timeout)?;
+
+    let mut current_service: Option<String> = None;
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        if let Some(service_name) = parse_macos_service_order_line(trimmed) {
+            current_service = Some(service_name);
+            continue;
+        }
+
+        if let Some(port_and_device) = trimmed.strip_prefix("(Hardware Port: ") {
+            let Some(service_name) = current_service.as_ref() else {
+                continue;
+            };
+
+            let port_and_device = port_and_device.trim_end_matches(')');
+            let Some((hardware_port, device)) = port_and_device.split_once(", Device: ") else {
+                continue;
+            };
+
+            let hardware_port_lower = hardware_port.trim().to_lowercase();
+            let device = device.trim();
+
+            if device == wifi_device
+                && (hardware_port_lower.contains("airport") || hardware_port_lower.contains("wi-fi"))
+            {
+                return Some(service_name.clone());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_service_order_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    let rest = line.strip_prefix('(')?;
+    let (index, service_name) = rest.split_once(") ")?;
+
+    if index.chars().all(|ch| ch.is_ascii_digit()) {
+        let service_name = service_name.trim();
+        if !service_name.is_empty() {
+            return Some(service_name.to_string());
+        }
+    }
+
+    None
+}
+
+/// Find Wi-Fi BSD device name by parsing `networksetup -listallhardwareports`.
+#[cfg(target_os = "macos")]
+fn find_macos_wifi_device(timeout: Duration) -> Option<String> {
+    let output = command_stdout("networksetup", &["-listallhardwareports"], timeout)?;
+
+    let mut wifi_port = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        if let Some(port) = trimmed.strip_prefix("Hardware Port:") {
+            let lower = port.trim().to_lowercase();
+            wifi_port = lower.contains("airport") || lower.contains("wi-fi");
+            continue;
+        }
+
+        if wifi_port {
+            if let Some(device) = trimmed.strip_prefix("Device:") {
+                let iface = device.trim();
+                if !iface.is_empty() {
+                    return Some(iface.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Parse SSID from `system_profiler SPAirPortDataType` output.
+/// Looks for "SSID: " under "Current Network Information".
+#[cfg(target_os = "macos")]
+fn parse_system_profiler_ssid(output: &str) -> Option<String> {
+    let mut in_current_network = false;
+    let mut current_network_indent: Option<usize> = None;
+
+    const IGNORED_KEYS: &[&str] = &[
+        "PHY Mode",
+        "Channel",
+        "Country Code",
+        "Network Type",
+        "Security",
+        "Signal / Noise",
+        "Transmit Rate",
+        "MCS Index",
+        "SSID",
+        "BSSID",
+        "RSSI",
+        "Noise",
+        "HT",
+        "MIMO",
+        "NSS",
+        "DFS",
+        "State",
+        "Mode",
+    ];
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let indent = line.chars().take_while(|ch| ch.is_whitespace()).count();
+
+        if trimmed.contains("Current Network Information") {
+            in_current_network = true;
+            current_network_indent = Some(indent);
+            continue;
+        }
+
+        if in_current_network {
+            // End of the current network block (next section at same or lower indent)
+            if !trimmed.is_empty()
+                && current_network_indent.is_some_and(|base| indent <= base)
+                && !trimmed.ends_with(':')
+            {
+                break;
+            }
+
+            if let Some(ssid_value) = trimmed
+                .strip_prefix("SSID:")
+                .or_else(|| trimmed.strip_prefix("SSID :"))
+            {
+                if let Some(ssid) = parse_macos_wifi_ssid_value(ssid_value) {
+                    return Some(ssid);
+                }
+            }
+
+            if trimmed.ends_with(':') {
+                let label = trimmed.trim_end_matches(':').trim();
+                let lower_label = label.to_lowercase();
+                let is_known_key = IGNORED_KEYS.iter().any(|key| lower_label == key.to_lowercase());
+
+                if !label.is_empty() && !is_known_key {
+                    if let Some(ssid) = parse_macos_wifi_ssid_value(label) {
+                        return Some(ssid);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn parse_wifi_tool_ssid(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("SSID:")
+            .or_else(|| trimmed.strip_prefix("SSID :"))
+            .map(str::trim)
+            .and_then(parse_macos_wifi_ssid_value)
+    })
 }
 
 fn get_local_network_info() -> NetworkInfo {
@@ -2216,7 +2704,9 @@ fn get_local_network_info() -> NetworkInfo {
     let ping_timeout = Duration::from_millis(2_000);
 
     #[cfg(target_os = "macos")]
-    let (local_ip, ssid, vpn, ping_output) = {
+    let (local_ip, ssid, ping_output) = {
+        let wifi_permission_state = macos_wifi_permission_state().to_string();
+
         let default_iface = command_stdout("route", &["-n", "get", "default"], timeout)
             .as_deref()
             .and_then(parse_macos_default_interface);
@@ -2233,35 +2723,29 @@ fn get_local_network_info() -> NetworkInfo {
                     timeout,
                 )
             });
-        let ssid = default_iface
-            .as_deref()
-            .and_then(|iface| {
-                command_stdout("networksetup", &["-getairportnetwork", iface], timeout)
-            })
-            .or_else(|| command_stdout("networksetup", &["-getairportnetwork", "en0"], timeout))
-            .as_deref()
-            .and_then(parse_macos_wifi_ssid);
-        let vpn = shell_stdout("scutil --nc list 2>/dev/null | awk '/Connected/ {match($0, /\\\"[^\\\"]+\\\"/); if (RSTART) {print substr($0, RSTART + 1, RLENGTH - 2); exit}}'", timeout)
-            .map(|name| format!("Yes ({})", name))
-            .or_else(|| shell_stdout("ifconfig | awk '/^(ppp|ipsec)[0-9]*:/ {iface=$1} /status: active/ && iface {gsub(\":\", \"\", iface); print \"Yes (\" iface \")\"; exit}'", timeout))
-            .or_else(|| Some("No".to_string()));
+        // Wi-Fi can be connected but not the default route (e.g. Ethernet is default).
+        // Detect the actual Wi-Fi interface instead of assuming it's the default interface.
+        let ssid = if wifi_permission_state == "granted" {
+            detect_macos_wifi_ssid(timeout)
+                .or_else(|| Some("Unavailable".to_string()))
+        } else {
+            Some(macos_wifi_permission_needed_message())
+        };
         let ping_output =
             command_stdout("ping", &["-c", "1", "-W", "1000", "1.1.1.1"], ping_timeout);
-        (local_ip, ssid, vpn, ping_output)
+        (local_ip, ssid, ping_output)
     };
 
     #[cfg(target_os = "windows")]
-    let (local_ip, ssid, vpn, ping_output) = {
+    let (local_ip, ssid, ping_output) = {
         let local_ip = shell_stdout("powershell -NoProfile -Command \"(Get-NetIPConfiguration | Where-Object {$_.IPv4DefaultGateway -and $_.IPv4Address} | Select-Object -First 1).IPv4Address.IPAddress\"", timeout);
         let ssid = shell_stdout("netsh wlan show interfaces | powershell -NoProfile -Command \"$input | Where-Object {$_ -match '^\\s*SSID\\s*:' -and $_ -notmatch 'BSSID'} | Select-Object -First 1 | ForEach-Object {($_ -split ':',2)[1].Trim()}\"", timeout);
-        let vpn = shell_stdout("powershell -NoProfile -Command \"$vpn = Get-VpnConnection -ErrorAction SilentlyContinue | Where-Object {$_.ConnectionStatus -eq 'Connected'} | Select-Object -First 1; if ($vpn) { 'Yes (' + $vpn.Name + ')' } else { 'No' }\"", timeout)
-            .or_else(|| Some("Unavailable".to_string()));
         let ping_output = shell_stdout("ping -n 1 -w 1000 1.1.1.1", ping_timeout);
-        (local_ip, ssid, vpn, ping_output)
+        (local_ip, ssid, ping_output)
     };
 
     #[cfg(target_os = "linux")]
-    let (local_ip, ssid, vpn, ping_output) = {
+    let (local_ip, ssid, ping_output) = {
         let local_ip = first_non_empty_command(&[
             "hostname -I | awk '{print $1}'",
             "ip route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i == \"src\") {print $(i+1); exit}}'",
@@ -2273,23 +2757,24 @@ fn get_local_network_info() -> NetworkInfo {
             ],
             timeout,
         );
-        let vpn = shell_stdout(
-            "ip -o link show up | awk -F': ' '/tun|tap|wg|ppp/ {print \"Yes (\" $2 \")\"; exit}'",
-            timeout,
-        )
-        .or_else(|| Some("No".to_string()));
         let ping_output = shell_stdout("ping -c 1 -W 1 1.1.1.1", ping_timeout);
-        (local_ip, ssid, vpn, ping_output)
+        (local_ip, ssid, ping_output)
     };
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    let (local_ip, ssid, vpn, ping_output) = (None, None, None, None);
+    let (local_ip, ssid, ping_output) = (None, None, None);
+
+    #[cfg(not(target_os = "macos"))]
+    let wifi_permission_state = "granted".to_string();
+
+    #[cfg(target_os = "macos")]
+    let wifi_permission_state = macos_wifi_permission_state().to_string();
 
     NetworkInfo {
         local_ip: normalize_unavailable(local_ip),
         public_ip: "Unavailable".to_string(),
         ssid: normalize_unavailable(ssid),
-        vpn: normalize_unavailable(vpn),
+        wifi_permission_state,
         latency: normalize_unavailable(ping_output.as_deref().and_then(parse_ping_latency)),
     }
 }
@@ -3547,10 +4032,7 @@ fn ensure_app_icon_cached(
 }
 
 #[tauri::command]
-fn list_apps(
-    app: tauri::AppHandle,
-    cache_state: tauri::State<AppsCacheState>,
-) -> Vec<AppInfo> {
+fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -> Vec<AppInfo> {
     {
         let last_updated = cache_state.last_updated.lock().unwrap();
         let apps = cache_state.apps.lock().unwrap();
@@ -3732,13 +4214,6 @@ fn capture_region(
             return Err("No monitor found".to_string());
         }
     };
-    let tauri_name = match tauri_monitor.name() {
-        Some(n) => n.to_string(),
-        None => {
-            let _ = window.close();
-            return Err("Monitor has no name".to_string());
-        }
-    };
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let app = window.app_handle();
 
@@ -3748,12 +4223,7 @@ fn capture_region(
 
     // 3. Do capture in a closure so we can clean up on error
     let capture_result = (|| -> Result<String, String> {
-        let xcap_monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
-        let xcap_monitor = xcap_monitors
-            .into_iter()
-            .find(|m| m.name().ok().as_deref() == Some(&tauri_name))
-            .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
-            .ok_or_else(|| "Could not find matching xcap monitor".to_string())?;
+        let xcap_monitor = xcap_monitor_for_tauri_monitor(&tauri_monitor)?;
 
         let image = xcap_monitor.capture_image().map_err(|e| e.to_string())?;
 
@@ -3843,6 +4313,158 @@ fn capture_region(
     let _ = window.close();
 
     capture_result
+}
+
+fn xcap_monitor_for_tauri_monitor(tauri_monitor: &tauri::Monitor) -> Result<xcap::Monitor, String> {
+    let tauri_position = tauri_monitor.position();
+    let tauri_size = tauri_monitor.size();
+    let center_x = tauri_position.x + (tauri_size.width as i32 / 2);
+    let center_y = tauri_position.y + (tauri_size.height as i32 / 2);
+
+    std::panic::catch_unwind(|| {
+        xcap::Monitor::from_point(center_x, center_y)
+            .expect("Could not find xcap monitor for selector monitor")
+    })
+    .map_err(|_| "Could not find xcap monitor for selector monitor".to_string())
+}
+
+fn monitor_to_logical_geometry(
+    monitor: &tauri::Monitor,
+) -> (tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>) {
+    let scale_factor = monitor.scale_factor();
+    let position = monitor.position();
+    let size = monitor.size();
+
+    (
+        tauri::LogicalPosition {
+            x: position.x as f64 / scale_factor,
+            y: position.y as f64 / scale_factor,
+        },
+        tauri::LogicalSize {
+            width: size.width as f64 / scale_factor,
+            height: size.height as f64 / scale_factor,
+        },
+    )
+}
+
+fn monitor_geometry_for_mouse<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    monitor_for_mouse(app)
+        .or_else(|| app.primary_monitor().ok().flatten())
+        .map(|monitor| monitor_to_logical_geometry(&monitor))
+}
+
+#[cfg(target_os = "macos")]
+fn monitor_for_mouse<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<tauri::Monitor> {
+    use core_graphics::{
+        display::CGDisplay, event::CGEvent, event_source::CGEventSource,
+        event_source::CGEventSourceStateID,
+    };
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let mouse_point = event.location();
+
+    let display_id = CGDisplay::displays_with_point(mouse_point, 1)
+        .ok()
+        .and_then(|(display_ids, _)| display_ids.first().copied())?;
+    let display = CGDisplay::new(display_id);
+    let bounds = display.bounds();
+
+    let monitors = app.available_monitors().ok()?;
+    monitors.into_iter().find(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        position.x == bounds.origin.x as i32
+            && position.y == bounds.origin.y as i32
+            && size.width as f64 == bounds.size.width
+            && size.height as f64 == bounds.size.height
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn monitor_for_mouse<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<tauri::Monitor> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut cursor = POINT { x: 0, y: 0 };
+    let cursor_ok = unsafe { GetCursorPos(&mut cursor) } != 0;
+    let monitors = app.available_monitors().ok()?;
+
+    if cursor_ok {
+        if let Some(monitor) = monitors.into_iter().find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = position.x;
+            let top = position.y;
+            let right = left + size.width as i32;
+            let bottom = top + size.height as i32;
+
+            cursor.x >= left && cursor.x < right && cursor.y >= top && cursor.y < bottom
+        }) {
+            return Some(monitor);
+        }
+    }
+
+    None
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn monitor_for_mouse<R: Runtime>(_app: &tauri::AppHandle<R>) -> Option<tauri::Monitor> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn selector_geometry_for_mouse<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    monitor_geometry_for_mouse(app)
+}
+
+#[cfg(target_os = "windows")]
+fn selector_geometry_for_mouse<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    monitor_geometry_for_mouse(app)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn selector_geometry_for_mouse<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    monitor_geometry_for_mouse(app)
+}
+
+fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
+    if let Some((logical_pos, logical_size)) = selector_geometry_for_mouse(app) {
+        if let Some(selector) = app.get_webview_window("selector") {
+            let _ = selector.emit("set-mode", mode);
+            let _ = selector.set_size(tauri::Size::Logical(logical_size));
+            let _ = selector.set_position(tauri::Position::Logical(logical_pos));
+            let _ = selector.show();
+            let _ = selector.set_focus();
+        } else {
+            let builder = tauri::WebviewWindowBuilder::new(
+                app,
+                "selector",
+                tauri::WebviewUrl::App(format!("index.html?mode={}", mode).into()),
+            )
+            .title("Selector")
+            .inner_size(logical_size.width, logical_size.height)
+            .position(logical_pos.x, logical_pos.y)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .shadow(false)
+            .visible(false);
+
+            if let Ok(window) = builder.build() {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -4128,12 +4750,14 @@ fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
             record_previous_focus(app);
         }
 
-        // Center window on primary monitor when showing from hidden state.
+        // Center window on monitor under cursor when showing from hidden state.
         if !was_visible {
-            if let Ok(Some(monitor)) = app.primary_monitor() {
-                let monitor_size = monitor.size();
-                let monitor_pos = monitor.position();
+            if let Some(monitor) =
+                monitor_for_mouse(app).or_else(|| app.primary_monitor().ok().flatten())
+            {
                 let scale_factor = monitor.scale_factor();
+                let (logical_monitor_pos, logical_monitor_size) =
+                    monitor_to_logical_geometry(&monitor);
 
                 let window_size = window.inner_size().unwrap_or(tauri::PhysicalSize {
                     width: 760,
@@ -4141,15 +4765,10 @@ fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
                 });
                 let logical_window_size = window_size.to_logical::<f64>(scale_factor);
 
-                let logical_monitor_width = monitor_size.width as f64 / scale_factor;
-                let logical_monitor_height = monitor_size.height as f64 / scale_factor;
-                let logical_monitor_x = monitor_pos.x as f64 / scale_factor;
-                let logical_monitor_y = monitor_pos.y as f64 / scale_factor;
-
-                let x =
-                    logical_monitor_x + (logical_monitor_width - logical_window_size.width) / 2.0;
-                let y =
-                    logical_monitor_y + (logical_monitor_height - logical_window_size.height) / 2.5; // Slightly above true center for better UX
+                let x = logical_monitor_pos.x
+                    + (logical_monitor_size.width - logical_window_size.width) / 2.0;
+                let y = logical_monitor_pos.y
+                    + (logical_monitor_size.height - logical_window_size.height) / 2.5; // Slightly above true center for better UX
 
                 let _ =
                     window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
@@ -4199,46 +4818,7 @@ pub fn run() {
                                 && shortcut.key == screenshot_shortcut.key
                             {
                                 let mode = "screenshot";
-                                let monitor = app.primary_monitor().ok().flatten();
-
-                                if let Some(m) = monitor {
-                                    let pos = m.position();
-                                    let size = m.size();
-                                    let scale_factor = m.scale_factor();
-                                    let logical_pos = pos.to_logical::<f64>(scale_factor);
-                                    let logical_size = size.to_logical::<f64>(scale_factor);
-
-                                    if let Some(selector) = app.get_webview_window("selector") {
-                                        let _ = selector.emit("set-mode", mode);
-                                        let _ =
-                                            selector.set_size(tauri::Size::Logical(logical_size));
-                                        let _ = selector
-                                            .set_position(tauri::Position::Logical(logical_pos));
-                                        let _ = selector.show();
-                                        let _ = selector.set_focus();
-                                    } else {
-                                        let builder = tauri::WebviewWindowBuilder::new(
-                                            app,
-                                            "selector",
-                                            tauri::WebviewUrl::App(
-                                                format!("index.html?mode={}", mode).into(),
-                                            ),
-                                        )
-                                        .title("Selector")
-                                        .inner_size(logical_size.width, logical_size.height)
-                                        .position(logical_pos.x, logical_pos.y)
-                                        .decorations(false)
-                                        .transparent(true)
-                                        .always_on_top(true)
-                                        .shadow(false)
-                                        .visible(false);
-
-                                        if let Ok(window) = builder.build() {
-                                            let _ = window.show();
-                                            let _ = window.set_focus();
-                                        }
-                                    }
-                                }
+                                show_selector_window(app, mode);
                             }
                         }
 
@@ -4249,46 +4829,7 @@ pub fn run() {
                                 && shortcut.key == ocr_shortcut.key
                             {
                                 let mode = "ocr";
-                                let monitor = app.primary_monitor().ok().flatten();
-
-                                if let Some(m) = monitor {
-                                    let pos = m.position();
-                                    let size = m.size();
-                                    let scale_factor = m.scale_factor();
-                                    let logical_pos = pos.to_logical::<f64>(scale_factor);
-                                    let logical_size = size.to_logical::<f64>(scale_factor);
-
-                                    if let Some(selector) = app.get_webview_window("selector") {
-                                        let _ = selector.emit("set-mode", mode);
-                                        let _ =
-                                            selector.set_size(tauri::Size::Logical(logical_size));
-                                        let _ = selector
-                                            .set_position(tauri::Position::Logical(logical_pos));
-                                        let _ = selector.show();
-                                        let _ = selector.set_focus();
-                                    } else {
-                                        let builder = tauri::WebviewWindowBuilder::new(
-                                            app,
-                                            "selector",
-                                            tauri::WebviewUrl::App(
-                                                format!("index.html?mode={}", mode).into(),
-                                            ),
-                                        )
-                                        .title("Selector")
-                                        .inner_size(logical_size.width, logical_size.height)
-                                        .position(logical_pos.x, logical_pos.y)
-                                        .decorations(false)
-                                        .transparent(true)
-                                        .always_on_top(true)
-                                        .shadow(false)
-                                        .visible(false);
-
-                                        if let Ok(window) = builder.build() {
-                                            let _ = window.show();
-                                            let _ = window.set_focus();
-                                        }
-                                    }
-                                }
+                                show_selector_window(app, mode);
                             }
                         }
                     }
@@ -4428,6 +4969,8 @@ pub fn run() {
             quit_app,
             list_apps,
             get_network_info,
+            request_wifi_permission,
+            open_wifi_privacy_settings,
             docker_status,
             search_docker_hub,
             list_containers,

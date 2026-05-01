@@ -11,7 +11,7 @@
 | Web Search | `web-search` | `search:` or queries containing `google`, `search`, `web` | Open Google search in default browser | No tool in current plugin file |
 | Translate | `translate` | `translate:`, `/translate`, `translate`, `translation`; quick translate `t:`/`tr:` handled by App | Open translate UI or quick-translate result | None currently |
 | Notes | `notes` | `note:`, `notes:`, `search notes:`, `note`, `notes`, `memo` | Save quick note, search notes, open notes view | `search_notes`, `create_note` |
-| Network Info | `network-info` | `net`, `network`, `net:`, `network:`, `wifi`, `wi-fi`, `vpn` | Copy network summary or details | `get_network_info` |
+| Network Info | `network-info` | `net`, `network`, `net:`, `network:`, `wifi`, `wi-fi` | Copy network summary or details | `get_network_info` |
 | Speedtest | `speedtest` | `speedtest`, `speed test`, `internet speed`, `/st` | Start/view/stop speed test; configure duration and sample sizes | None currently |
 | Weather | `weather` | `/wt`, `weather:`, `weather`, `forecast` | Search/save location; show current weather and 7-day forecast | `get_current_weather`, `get_weather_forecast` |
 
@@ -53,7 +53,7 @@
 - Notes are stored locally through Rust commands and SQLite.
 
 ### Network Info
-- Shows local IP, public IP, Wi-Fi SSID, VPN status, and latency.
+- Shows local IP, public IP, Wi-Fi SSID, and latency.
 - Public IP uses `api.ipify.org` and is cached briefly.
 
 ### Speedtest

@@ -11,7 +11,7 @@ Validated against `src/plugins/index.ts` and plugin source files.
 | Web Search | `webSearch.tsx` | All queries, explicit `search:` prefix | Open Google search URL in default browser | `@tauri-apps/plugin-opener` `openUrl` | No |
 | Translate | `translate.tsx` | `translate:`, `/translate`, `translate`, `translation`; quick `t:`/`tr:` handled by `App.tsx` | Inline translation UI and quick translation result/copy flow | Selected AI provider through frontend fetch | No |
 | Notes | `notes.tsx` | `note:`, `notes:`, `search notes:`, `note`, `notes`, `memo` | Quick capture; note search; open notes manager; open note by event | SQLite commands in Rust | `search_notes`, `create_note` |
-| Network info | `networkInfo.tsx` | `net`, `network`, `net:`, `network:`, `wifi`, `vpn` | Local/public IP, SSID, VPN, latency; cached copy actions | `get_network_info`; public IP from Rust via api.ipify.org | `get_network_info` |
+| Network info | `networkInfo.tsx` | `net`, `network`, `net:`, `network:`, `wifi` | Local/public IP, SSID, latency; cached copy actions | `get_network_info`; public IP from Rust via api.ipify.org | `get_network_info` |
 | Speedtest | `speedtest.tsx` | `speedtest`, `speed test`, `internet speed`, `/st` | Cloudflare-based latency/download/upload test with configurable limits and live preview | Cloudflare endpoints from frontend | No |
 | Weather | `weather.tsx` | `/wt`, `weather:`, `weather`, `forecast` | Saved/current location weather and 7-day forecast; Open-Meteo geocoding/weather | Open-Meteo frontend fetch | `get_current_weather`, `get_weather_forecast` |
 

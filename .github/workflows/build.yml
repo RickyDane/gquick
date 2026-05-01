@@ -331,17 +331,17 @@ jobs:
           if-no-files-found: warn
 
       # ------------------------------------------------------------------
-      # Release (tag builds only)
+      # Release (tag builds + auto-tagged main builds)
       # ------------------------------------------------------------------
 
-      - name: Upload release assets
-        if: github.ref_type == 'tag'
+      - name: Create draft release
+        if: github.event_name == 'push' && github.ref_type != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
-          name: GQuick ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(steps.create_tag.outputs.VERSION, '-beta') || contains(steps.create_tag.outputs.VERSION, '-alpha') || contains(steps.create_tag.outputs.VERSION, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
+          name: GQuick ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
+          tag_name: ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
           generate_release_notes: true
           files: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg

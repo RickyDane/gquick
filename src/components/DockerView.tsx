@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileCode2, Loader2, Play, Terminal, Trash2, X } from "lucide-react";
+import { AlertTriangle, FileCode2, Loader2, Play, Terminal, Trash2, X } from "lucide-react";
 import { searchDockerHub, DockerHubResult } from "../utils/dockerHub";
 import { cn } from "../utils/cn";
 
@@ -73,8 +73,8 @@ interface DockerViewProps {
 type SelectedItem = { type: "container" | "image"; id: string; label: string };
 
 type ContextMenuState =
-  | { type: "container"; x: number; y: number; container: ContainerInfo }
-  | { type: "background"; x: number; y: number };
+  | { type: "container"; x: number; y: number; container: ContainerInfo; focusReturn?: HTMLElement | null }
+  | { type: "background"; x: number; y: number; focusReturn?: HTMLElement | null };
 
 const defaultCompose = `services:\n  app:\n    image: nginx:latest\n    ports:\n      - "8080:80"\n`;
 const detailPanelWidthKey = "docker-detail-panel-width";
@@ -151,6 +151,7 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
   const [detailPanelWidth, setDetailPanelWidth] = useState(initialDetailPanelWidth);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [selectedImageContext, setSelectedImageContext] = useState<DockerInitialImage | null>(null);
+  const [isPruneDialogOpen, setIsPruneDialogOpen] = useState(false);
   const [output, setOutput] = useState("Ready.");
   const [runForm, setRunForm] = useState<RunForm>({ image: "", name: "", detached: true, interactive: false, ports: "", env: "", volumes: "", command: "", extraArgs: "" });
   const [composePath, setComposePath] = useState(localStorage.getItem("docker-compose-path") || "");
@@ -159,6 +160,10 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
   const hubSearchSeq = useRef(0);
   const refreshSeq = useRef(0);
   const mountedRef = useRef(false);
+  const pruneDialogRef = useRef<HTMLDivElement>(null);
+  const pruneCancelButtonRef = useRef<HTMLButtonElement>(null);
+  const pruneConfirmButtonRef = useRef<HTMLButtonElement>(null);
+  const pruneTriggerRef = useRef<HTMLElement | null>(null);
 
   const refresh = useCallback(async () => {
     const seq = ++refreshSeq.current;
@@ -218,6 +223,61 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!isPruneDialogOpen) return;
+
+    pruneCancelButtonRef.current?.focus();
+
+    const getFocusableElements = () => Array.from(
+      pruneDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      ) ?? []
+    ).filter((element) => element.offsetParent !== null);
+
+    const closeDialog = () => {
+      setIsPruneDialogOpen(false);
+      requestAnimationFrame(() => pruneTriggerRef.current?.focus());
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDialog();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+
+      const focusableElements = getFocusableElements();
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!focusableElements.includes(activeElement as HTMLElement)) {
+        event.preventDefault();
+        (event.shiftKey ? lastElement : firstElement).focus();
+        return;
+      }
+
+      if (event.shiftKey && activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [isPruneDialogOpen]);
 
   useEffect(() => {
     localStorage.setItem(detailPanelWidthKey, String(detailPanelWidth));
@@ -334,16 +394,16 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
     setSelected({ type: "container", id: container.id, label: container.names });
   }
 
-  function openContainerMenu(container: ContainerInfo, x: number, y: number) {
+  function openContainerMenu(container: ContainerInfo, x: number, y: number, focusReturn?: HTMLElement | null) {
     const position = menuPosition(x, y);
-    setContextMenu({ type: "container", x: position.x, y: position.y, container });
+    setContextMenu({ type: "container", x: position.x, y: position.y, container, focusReturn: focusReturn ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
   }
 
   function openBackgroundMenu(event: MouseEvent<HTMLDivElement>) {
     if (tab !== "containers" || isInteractiveTarget(event.target)) return;
     event.preventDefault();
     const position = menuPosition(event.clientX, event.clientY);
-    setContextMenu({ type: "background", x: position.x, y: position.y });
+    setContextMenu({ type: "background", x: position.x, y: position.y, focusReturn: document.activeElement instanceof HTMLElement ? document.activeElement : null });
   }
 
   const resizeDetailPanel = useCallback((nextWidth: number) => {
@@ -387,7 +447,24 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
   const execShell = useCallback((id: string) => confirmRisk("Run non-interactive shell command in this container?") && void runAction(() => invoke("exec_container", { id, command: ["sh", "-lc", "pwd && ls -la"] }), "Exec shell"), [refresh]);
   const inspectTarget = useCallback((id: string) => void runAction(() => invoke("inspect_docker", { target: id }), "Inspect"), [refresh]);
   const deleteSelected = useCallback((id: string, type: "container" | "image") => confirmRisk(`Delete ${type} ${id}?`) && void runAction(() => type === "container" ? invoke("manage_container", { id, action: "remove", confirmed: true }) : invoke("delete_image", { id, force: false, confirmed: true }), `Delete ${type}`), [refresh]);
-  const pruneSystem = useCallback(() => confirmRisk("Prune unused Docker system data? Images/containers may be removed.") && void runAction(() => invoke("prune_docker", { kind: "system", volumes: false, force: true, confirmed: true }), "Prune system"), [refresh]);
+  const openPruneDialog = useCallback((trigger?: HTMLElement | null) => {
+    if (busy || !status?.cli_installed || !status?.daemon_running) return;
+    pruneTriggerRef.current = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    setIsPruneDialogOpen(true);
+  }, [busy, status?.cli_installed, status?.daemon_running]);
+
+  const confirmPruneSystem = useCallback(() => {
+    if (!status?.cli_installed || !status?.daemon_running) {
+      setIsPruneDialogOpen(false);
+      setOutput("Docker CLI or daemon unavailable. Prune canceled.");
+      requestAnimationFrame(() => pruneTriggerRef.current?.focus());
+      return;
+    }
+
+    setIsPruneDialogOpen(false);
+    requestAnimationFrame(() => pruneTriggerRef.current?.focus());
+    void runAction(() => invoke("prune_docker", { kind: "system", volumes: false, force: true, confirmed: true }), "Prune system");
+  }, [runAction, status?.cli_installed, status?.daemon_running]);
 
   const statusLabel = status?.cli_installed ? (status.daemon_running ? "Running" : "Daemon unavailable") : "Docker not installed";
   const statusClass = status?.daemon_running ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10" : "text-amber-300 border-amber-500/30 bg-amber-500/10";
@@ -399,7 +476,7 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
           {(["containers", "images", "hub", "compose", "activity"] as Tab[]).map((item) => (
             <button key={item} onClick={() => setTab(item)} className={cn("mb-1 w-full truncate rounded-lg px-2 py-2 text-left text-xs capitalize cursor-pointer", tab === item ? "bg-white/10 text-white" : "text-zinc-400 hover:bg-white/5")}>{item}</button>
           ))}
-          <button onClick={pruneSystem} className="mt-4 inline-flex w-full items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-2 text-left text-xs text-red-300 hover:bg-red-500/20 cursor-pointer"><Trash2 className="h-3 w-3 shrink-0" /> <span className="truncate">Prune</span></button>
+          <button onClick={(event) => openPruneDialog(event.currentTarget)} disabled={busy || !status?.cli_installed || !status?.daemon_running} className="mt-4 inline-flex w-full items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-2 text-left text-xs text-red-300 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"><Trash2 className="h-3 w-3 shrink-0" /> <span className="truncate">Prune</span></button>
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden p-3 pb-12" onContextMenu={openBackgroundMenu}>
@@ -411,7 +488,7 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
           {loading ? <div className="p-6 text-center text-sm text-zinc-400"><Loader2 className="inline h-4 w-4 animate-spin" /> Loading Docker...</div> : !status?.cli_installed || !status?.daemon_running ? (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">{status?.error_code}: {status?.error_message || "Docker CLI or daemon unavailable."}</div>
           ) : tab === "containers" ? (
-            <Rows items={filteredContainers.map((c) => ({ id: c.id, title: c.names, subtitle: `${c.image} • ${c.status}${c.ports ? ` • ${c.ports}` : ""}`, onClick: () => selectContainer(c), onContextMenu: (x, y) => openContainerMenu(c, x, y), onMenuButton: (event) => openContainerMenu(c, event.clientX, event.clientY) }))} />
+            <Rows items={filteredContainers.map((c) => ({ id: c.id, title: c.names, subtitle: `${c.image} • ${c.status}${c.ports ? ` • ${c.ports}` : ""}`, onClick: () => selectContainer(c), onContextMenu: (x, y) => openContainerMenu(c, x, y), onMenuButton: (event) => openContainerMenu(c, event.clientX, event.clientY, event.currentTarget) }))} />
           ) : tab === "images" ? (
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
               {selectedImageContext && <SelectedImageCard image={selectedImageContext} onClear={() => setSelectedImageContext(null)} />}
@@ -433,8 +510,56 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
         </div>
 
         <DetailDrawer selected={selected} width={detailPanelWidth} busy={busy} output={output} onClose={() => setSelected(null)} onResizeStart={startDetailPanelResize} onResize={(width) => resizeDetailPanel(width)} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onDelete={deleteSelected} />
-        <DockerContextMenu menu={contextMenu} busy={busy} dockerAvailable={Boolean(status?.cli_installed && status.daemon_running)} onClose={() => setContextMenu(null)} onContainerAction={runContainerAction} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onRemove={(container) => deleteSelected(container.id, "container")} onRefresh={() => void refresh()} onSearch={() => window.dispatchEvent(new CustomEvent("gquick-focus-docker-search"))} onPrune={pruneSystem} />
+        <DockerContextMenu menu={contextMenu} busy={busy} dockerAvailable={Boolean(status?.cli_installed && status.daemon_running)} onClose={() => setContextMenu(null)} onContainerAction={runContainerAction} onLogs={showLogs} onExec={execShell} onInspect={inspectTarget} onRemove={(container) => deleteSelected(container.id, "container")} onRefresh={() => void refresh()} onSearch={() => window.dispatchEvent(new CustomEvent("gquick-focus-docker-search"))} onPrune={openPruneDialog} />
       </div>
+
+      {isPruneDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+          <div
+            ref={pruneDialogRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="docker-prune-dialog-title"
+            aria-describedby="docker-prune-dialog-description"
+            className="w-full max-w-sm rounded-2xl border border-red-500/20 bg-zinc-950/95 p-4 shadow-2xl shadow-black/40"
+          >
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border border-red-500/20 bg-red-500/10 text-red-400">
+                <AlertTriangle className="h-4 w-4" />
+              </span>
+              <h2 id="docker-prune-dialog-title">Prune Docker system?</h2>
+            </div>
+
+            <p id="docker-prune-dialog-description" className="mt-3 text-xs leading-5 text-zinc-400">
+              This permanently removes unused Docker data. Stopped containers, unused images, networks, and build cache may be deleted.
+            </p>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                ref={pruneCancelButtonRef}
+                type="button"
+                onClick={() => {
+                  setIsPruneDialogOpen(false);
+                  requestAnimationFrame(() => pruneTriggerRef.current?.focus());
+                }}
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-white/10 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                ref={pruneConfirmButtonRef}
+                type="button"
+                onClick={confirmPruneSystem}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Prune
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -538,7 +663,7 @@ function ComposePanel({ path, content, output, setPath, setContent, onRead, onWr
   </div>;
 }
 
-function DockerContextMenu({ menu, busy, dockerAvailable, onClose, onContainerAction, onLogs, onExec, onInspect, onRemove, onRefresh, onSearch, onPrune }: { menu: ContextMenuState | null; busy: boolean; dockerAvailable: boolean; onClose: () => void; onContainerAction: (container: ContainerInfo, action: "start" | "stop" | "restart") => void; onLogs: (id: string) => void; onExec: (id: string) => void; onInspect: (id: string) => void; onRemove: (container: ContainerInfo) => void; onRefresh: () => void; onSearch: () => void; onPrune: () => void }) {
+function DockerContextMenu({ menu, busy, dockerAvailable, onClose, onContainerAction, onLogs, onExec, onInspect, onRemove, onRefresh, onSearch, onPrune }: { menu: ContextMenuState | null; busy: boolean; dockerAvailable: boolean; onClose: () => void; onContainerAction: (container: ContainerInfo, action: "start" | "stop" | "restart") => void; onLogs: (id: string) => void; onExec: (id: string) => void; onInspect: (id: string) => void; onRemove: (container: ContainerInfo) => void; onRefresh: () => void; onSearch: () => void; onPrune: (trigger?: HTMLElement | null) => void }) {
   if (!menu) return null;
 
   const runItem = (action: () => void) => {
@@ -548,10 +673,10 @@ function DockerContextMenu({ menu, busy, dockerAvailable, onClose, onContainerAc
 
   if (menu.type === "background") {
     return <MenuShell x={menu.x} y={menu.y}>
-      <MenuItem label="Refresh" onSelect={() => runItem(onRefresh)} />
-      <MenuItem label="Search containers" disabled={!dockerAvailable} onSelect={() => runItem(onSearch)} />
+      <MenuItem label="Refresh" onSelect={(_event) => runItem(onRefresh)} />
+      <MenuItem label="Search containers" disabled={!dockerAvailable} onSelect={(_event) => runItem(onSearch)} />
       <MenuSeparator />
-      <MenuItem label="Prune unused data…" disabled={!dockerAvailable || busy} destructive onSelect={() => runItem(onPrune)} />
+      <MenuItem label="Prune unused data…" disabled={!dockerAvailable || busy} destructive onSelect={(event) => runItem(() => onPrune(menu.focusReturn ?? event.currentTarget))} />
     </MenuShell>;
   }
 
@@ -560,15 +685,15 @@ function DockerContextMenu({ menu, busy, dockerAvailable, onClose, onContainerAc
   const actionDisabled = busy || !dockerAvailable;
 
   return <MenuShell x={menu.x} y={menu.y}>
-    <MenuItem label="Start" disabled={running || actionDisabled} onSelect={() => runItem(() => onContainerAction(container, "start"))} />
-    <MenuItem label="Stop" disabled={!running || actionDisabled} onSelect={() => runItem(() => onContainerAction(container, "stop"))} />
-    <MenuItem label="Restart" disabled={!running || actionDisabled} onSelect={() => runItem(() => onContainerAction(container, "restart"))} />
+    <MenuItem label="Start" disabled={running || actionDisabled} onSelect={(_event) => runItem(() => onContainerAction(container, "start"))} />
+    <MenuItem label="Stop" disabled={!running || actionDisabled} onSelect={(_event) => runItem(() => onContainerAction(container, "stop"))} />
+    <MenuItem label="Restart" disabled={!running || actionDisabled} onSelect={(_event) => runItem(() => onContainerAction(container, "restart"))} />
     <MenuSeparator />
-    <MenuItem label="Logs" disabled={!dockerAvailable || busy} onSelect={() => runItem(() => onLogs(container.id))} />
-    <MenuItem label="Exec shell" disabled={!running || actionDisabled} onSelect={() => runItem(() => onExec(container.id))} />
-    <MenuItem label="Inspect" disabled={!dockerAvailable || busy} onSelect={() => runItem(() => onInspect(container.id))} />
+    <MenuItem label="Logs" disabled={!dockerAvailable || busy} onSelect={(_event) => runItem(() => onLogs(container.id))} />
+    <MenuItem label="Exec shell" disabled={!running || actionDisabled} onSelect={(_event) => runItem(() => onExec(container.id))} />
+    <MenuItem label="Inspect" disabled={!dockerAvailable || busy} onSelect={(_event) => runItem(() => onInspect(container.id))} />
     <MenuSeparator />
-    <MenuItem label="Remove container" disabled={busy || !dockerAvailable} destructive onSelect={() => runItem(() => onRemove(container))} />
+    <MenuItem label="Remove container" disabled={busy || !dockerAvailable} destructive onSelect={(_event) => runItem(() => onRemove(container))} />
   </MenuShell>;
 }
 
@@ -607,8 +732,8 @@ function MenuShell({ x, y, children }: { x: number; y: number; children: ReactNo
   return <div ref={menuRef} role="menu" onKeyDown={handleKeyDown} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()} className="fixed z-50 min-w-48 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/95 p-1 text-xs text-zinc-200 shadow-2xl backdrop-blur" style={{ left: x, top: y }}>{children}</div>;
 }
 
-function MenuItem({ label, disabled, destructive, onSelect }: { label: string; disabled?: boolean; destructive?: boolean; onSelect: () => void }) {
-  return <button role="menuitem" aria-disabled={disabled || undefined} disabled={disabled} onClick={onSelect} className={cn("block w-full rounded-lg px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer", destructive ? "text-red-300 hover:bg-red-500/10" : "hover:bg-white/10")}>{label}</button>;
+function MenuItem({ label, disabled, destructive, onSelect }: { label: string; disabled?: boolean; destructive?: boolean; onSelect: (event: MouseEvent<HTMLButtonElement>) => void }) {
+  return <button role="menuitem" aria-disabled={disabled || undefined} disabled={disabled} onClick={(event) => onSelect(event)} className={cn("block w-full rounded-lg px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer", destructive ? "text-red-300 hover:bg-red-500/10" : "hover:bg-white/10")}>{label}</button>;
 }
 
 function MenuSeparator() {

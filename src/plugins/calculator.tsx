@@ -1,6 +1,7 @@
 import { Calculator } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GQuickPlugin, SearchResultItem, ToolResult } from "./types";
+import { getLocaleInfo, formatLocaleNumber } from "../utils/locale";
 
 const MAX_CALCULATOR_QUERY_LENGTH = 256;
 const MAX_PARSE_DEPTH = 64;
@@ -113,10 +114,18 @@ class ExpressionParser {
 
 function evaluateMathExpression(query: string): number | null {
   if (query.length > MAX_CALCULATOR_QUERY_LENGTH) return null;
-  if (!/^[-+*/.()0-9\s]+$/.test(query) || !/[0-9]/.test(query)) return null;
+  // Accept both '.' and ',' as valid number characters
+  if (!/^[-+*/,.()0-9\s]+$/.test(query) || !/[0-9]/.test(query)) return null;
+
+  // Normalize locale-specific separators to '.' for internal parsing
+  const { decimalSeparator, thousandsSeparator } = getLocaleInfo();
+  let normalized = query.split(thousandsSeparator).join("");
+  if (decimalSeparator !== ".") {
+    normalized = normalized.split(decimalSeparator).join(".");
+  }
 
   try {
-    const result = new ExpressionParser(query).parse();
+    const result = new ExpressionParser(normalized).parse();
     return result !== null && Number.isFinite(result) ? result : null;
   } catch {
     return null;
@@ -166,12 +175,12 @@ export const calculatorPlugin: GQuickPlugin = {
       return [{
         id: "calculator-result",
         pluginId: "calculator",
-        title: `= ${result}`,
+        title: `= ${formatLocaleNumber(result)}`,
         subtitle: `Calculation: ${query}`,
         icon: Calculator,
         score: 100,
         onSelect: async () => {
-          await navigator.clipboard.writeText(result.toString());
+          await navigator.clipboard.writeText(formatLocaleNumber(result));
           await getCurrentWindow().hide();
         },
       }];

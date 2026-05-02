@@ -14,7 +14,7 @@ export function getLocaleInfo(): LocaleInfo {
   if (cached) return cached;
 
   const locale = navigator.language || navigator.languages?.[0] || "en-US";
-  const parts = new Intl.NumberFormat(locale).formatToParts(1234.5);
+  const parts = new Intl.NumberFormat([locale, "en-US"]).formatToParts(1234.5);
 
   let decimalSeparator = ".";
   let thousandsSeparator = ",";
@@ -50,5 +50,5 @@ export function parseLocaleNumber(str: string): number | null {
  */
 export function formatLocaleNumber(num: number): string {
   const { locale } = getLocaleInfo();
-  return new Intl.NumberFormat(locale).format(num);
+  return new Intl.NumberFormat([locale, "en-US"]).format(num);
 }

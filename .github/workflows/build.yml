@@ -319,7 +319,7 @@ jobs:
       # ------------------------------------------------------------------
 
       - name: Upload build artifacts
-        if: github.ref_type != 'tag'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: gquick-${{ matrix.os_name }}
@@ -330,6 +330,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
@@ -361,6 +362,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
@@ -441,9 +443,9 @@ jobs:
             echo "::warning::No macOS update bundle found"
           fi
 
-          # Linux: look for .AppImage.tar.gz and .AppImage.tar.gz.sig
-          LINUX_SIG=$(find artifacts -name "*.AppImage.tar.gz.sig" -type f | head -1)
-          LINUX_BUNDLE=$(find artifacts -name "*.AppImage.tar.gz" -not -name "*.sig" -type f | head -1)
+          # Linux: Tauri v2 reuses the normal AppImage as the update bundle.
+          LINUX_SIG=$(find artifacts -name "*.AppImage.sig" -type f | head -1)
+          LINUX_BUNDLE=$(find artifacts -name "*.AppImage" -not -name "*.sig" -type f | head -1)
           if [ -n "$LINUX_SIG" ] && [ -n "$LINUX_BUNDLE" ]; then
             SIG_CONTENT=$(cat "$LINUX_SIG")
             BUNDLE_NAME=$(basename "$LINUX_BUNDLE")
@@ -459,9 +461,14 @@ jobs:
             echo "::warning::No Linux update bundle found"
           fi
 
-          # Windows: look for .nsis.zip and .nsis.zip.sig
-          WIN_SIG=$(find artifacts -name "*.nsis.zip.sig" -type f | head -1)
-          WIN_BUNDLE=$(find artifacts -name "*.nsis.zip" -not -name "*.sig" -type f | head -1)
+          # Windows: Tauri v2 reuses the normal NSIS .exe or MSI installer as the update bundle.
+          # Prefer NSIS because it matches the user-facing installer asset.
+          WIN_SIG=$(find artifacts -name "*-setup.exe.sig" -type f | head -1)
+          WIN_BUNDLE=$(find artifacts -name "*-setup.exe" -not -name "*.sig" -type f | head -1)
+          if [ -z "$WIN_SIG" ] || [ -z "$WIN_BUNDLE" ]; then
+            WIN_SIG=$(find artifacts -name "*.msi.sig" -type f | head -1)
+            WIN_BUNDLE=$(find artifacts -name "*.msi" -not -name "*.sig" -type f | head -1)
+          fi
           if [ -n "$WIN_SIG" ] && [ -n "$WIN_BUNDLE" ]; then
             SIG_CONTENT=$(cat "$WIN_SIG")
             BUNDLE_NAME=$(basename "$WIN_BUNDLE")

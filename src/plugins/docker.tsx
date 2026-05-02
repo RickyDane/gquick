@@ -51,7 +51,7 @@ export const dockerPlugin: GQuickPlugin = {
     title: "Docker",
     icon: Box,
     keywords: ["docker", "container", "image", "hub", "compose"],
-    queryPrefixes: [/^docker\s*:/i],
+    queryPrefixes: ["docker:"],
   },
   shouldSearch: (query: string) => DOCKER_PREFIX_PATTERN.test(query.trim()),
   searchDebounceMs: 300,
@@ -202,7 +202,7 @@ function ActionRow({ actions }: { actions: NonNullable<SearchResultItem["actions
             e.stopPropagation();
             action.onRun();
           }}
-          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-zinc-200 transition-colors"
+          className="px-3 py-1.5 rounded-lg cursor-pointer bg-white/10 hover:bg-white/20 text-xs text-zinc-200 transition-colors"
         >
           {action.label}
         </button>

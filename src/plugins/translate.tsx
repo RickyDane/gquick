@@ -269,7 +269,7 @@ export const translatePlugin: GQuickPlugin = {
     subtitle: "AI-powered text translation",
     icon: Languages,
     keywords: ["translate", "translation", "language", "convert text"],
-    queryPrefixes: ["translate:", /^\/translate(?:$|\s)/i],
+    queryPrefixes: ["translate:", "/tr", "tr:"],
   },
   shouldSearch: (query: string) => {
     const trimmed = query.trim().toLowerCase();

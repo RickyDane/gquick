@@ -1235,6 +1235,19 @@ function App() {
     }
   }, []);
 
+  /** Format a queryPrefix into a human-readable trigger hint. */
+  const formatQueryPrefix = (prefix: string | RegExp): string => {
+    if (typeof prefix === "string") return prefix;
+    // Extract readable alternatives from regex like /^(speedtest|speed test|\/st)$/i
+    const src = prefix.source;
+    const altMatch = src.match(/\(([^)]+)\)/);
+    if (altMatch) {
+      return altMatch[1].split("|").map(s => s.replace(/^\\\//, "/").replace(/\\/g, "")).join(", ");
+    }
+    // Strip anchors/flags for simple patterns
+    return src.replace(/^\^/, "").replace(/\$$/, "").replace(/\\\//g, "/");
+  };
+
   const appActions = [
     { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} L⇧ C`, onClick: () => setView("chat") },
     { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => { setInitialNoteId(null); setView("notes"); } },
@@ -1249,6 +1262,7 @@ function App() {
     subtitle: p.metadata.subtitle,
     icon: p.metadata.icon,
     keywords: p.metadata.keywords,
+    queryPrefixes: p.metadata.queryPrefixes,
   }));
 
   const totalActionItems = appActions.length + pluginActions.length;
@@ -1303,10 +1317,12 @@ function App() {
           appActions[activeActionIndex].onClick();
         } else {
           const plugin = pluginActions[activeActionIndex - appActions.length];
-          // Type the plugin's first keyword into search to trigger it
-          const keyword = plugin.keywords[0] || plugin.label.toLowerCase();
+          // Use first queryPrefix if available, otherwise first keyword
+          const trigger = plugin.queryPrefixes && plugin.queryPrefixes.length > 0
+            ? formatQueryPrefix(plugin.queryPrefixes[0])
+            : plugin.keywords[0] || plugin.label.toLowerCase();
           setView("search");
-          setQuery(keyword + " ");
+          setQuery(trigger + " ");
           inputRef.current?.focus();
         }
         return;
@@ -1826,9 +1842,11 @@ function App() {
                             isActive ? "bg-white/10" : "hover:bg-white/10"
                           )}
                           onClick={() => {
-                            const keyword = plugin.keywords[0] || plugin.label.toLowerCase();
+                            const trigger = plugin.queryPrefixes && plugin.queryPrefixes.length > 0
+                              ? formatQueryPrefix(plugin.queryPrefixes[0])
+                              : plugin.keywords[0] || plugin.label.toLowerCase();
                             setView("search");
-                            setQuery(keyword + " ");
+                            setQuery(trigger + " ");
                             inputRef.current?.focus();
                           }}
                         >
@@ -1837,7 +1855,11 @@ function App() {
                             <span className="text-sm truncate">{plugin.label}</span>
                             {plugin.subtitle && <span className="text-[11px] text-zinc-500 truncate">{plugin.subtitle}</span>}
                           </div>
-                          <span className="text-xs text-zinc-600 font-mono shrink-0">{plugin.keywords.slice(0, 2).join(", ")}</span>
+                          <span className="text-xs text-zinc-600 font-mono shrink-0">
+                            {plugin.queryPrefixes && plugin.queryPrefixes.length > 0
+                              ? plugin.queryPrefixes.map(formatQueryPrefix).join(", ")
+                              : plugin.keywords.slice(0, 2).join(", ")}
+                          </span>
                         </div>
                       );
                     })}

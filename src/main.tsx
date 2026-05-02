@@ -9,7 +9,6 @@ function Root() {
   const [label, setLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    // In Tauri 2.0, ensure we get the label correctly
     const window = getCurrentWindow();
     setLabel(window.label);
   }, []);
@@ -19,7 +18,11 @@ function Root() {
     return null;
   }
 
-  if (label === "selector") {
+  // Detect selector window by label or by URL query param (fallback for Windows)
+  const params = new URLSearchParams(window.location.search);
+  const isSelector = label === "selector" || params.has("mode");
+
+  if (isSelector) {
     return <Selector />;
   }
 

@@ -338,9 +338,11 @@ jobs:
           set -euo pipefail
 
           missing_secrets=()
+          missing_secrets_count=0
           for secret_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!secret_name:-}" ]; then
               missing_secrets+=("$secret_name")
+              missing_secrets_count=$((missing_secrets_count + 1))
             fi
           done
 
@@ -353,6 +355,10 @@ jobs:
           all_dmg_files=()
           dmg_files=()
           mismatched_dmg_files=()
+          app_bundles_count=0
+          all_dmg_files_count=0
+          dmg_files_count=0
+          mismatched_dmg_files_count=0
 
           escaped_version="$(VERSION="$version" node -e 'process.stdout.write(process.env.VERSION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))')"
           # Tauri DMG names use the app name, exact version, optional arch, then .dmg
@@ -379,15 +385,19 @@ jobs:
 
               while IFS= read -r app_bundle; do
                 app_bundles+=("$app_bundle")
+                app_bundles_count=$((app_bundles_count + 1))
               done < <(find "$bundle_root" -name '*.app' -type d -prune -print | sort)
 
               while IFS= read -r dmg_file; do
                 all_dmg_files+=("$dmg_file")
+                all_dmg_files_count=$((all_dmg_files_count + 1))
                 dmg_basename="$(basename "$dmg_file")"
                 if [[ "$dmg_basename" =~ $version_regex ]]; then
                   dmg_files+=("$dmg_file")
+                  dmg_files_count=$((dmg_files_count + 1))
                 else
                   mismatched_dmg_files+=("$dmg_file")
+                  mismatched_dmg_files_count=$((mismatched_dmg_files_count + 1))
                 fi
               done < <(find "$bundle_root" -type f -name '*.dmg' -print | sort)
             else
@@ -395,32 +405,32 @@ jobs:
             fi
           done
 
-          echo "Discovered macOS app bundles (${#app_bundles[@]}):"
-          for app in "${app_bundles[@]}"; do
+          echo "Discovered macOS app bundles (${app_bundles_count}):"
+          for app in "${app_bundles[@]+"${app_bundles[@]}"}"; do
             echo "  $app"
           done
 
-          echo "Discovered macOS DMG files (${#all_dmg_files[@]}):"
-          for dmg in "${all_dmg_files[@]}"; do
+          echo "Discovered macOS DMG files (${all_dmg_files_count}):"
+          for dmg in "${all_dmg_files[@]+"${all_dmg_files[@]}"}"; do
             echo "  $dmg"
           done
 
-          echo "Current-version DMG matches for version ${version} (${#dmg_files[@]}):"
-          for dmg in "${dmg_files[@]}"; do
+          echo "Current-version DMG matches for version ${version} (${dmg_files_count}):"
+          for dmg in "${dmg_files[@]+"${dmg_files[@]}"}"; do
             echo "  $dmg"
           done
 
-          if [ ${#mismatched_dmg_files[@]} -gt 0 ]; then
+          if [ "$mismatched_dmg_files_count" -gt 0 ]; then
             echo "::error::Found macOS .dmg file(s) that do not strictly match current version ${version}. Refusing to continue because staging could publish stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
             echo "Mismatched DMG files:"
-            for dmg in "${mismatched_dmg_files[@]}"; do
+            for dmg in "${mismatched_dmg_files[@]+"${mismatched_dmg_files[@]}"}"; do
               echo "  $dmg"
             done
             print_bundle_root_listing
             exit 1
           fi
 
-          if [ ${#missing_secrets[@]} -gt 0 ]; then
+          if [ "$missing_secrets_count" -gt 0 ]; then
             if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
               echo "::error::Apple signing/notarization secrets are missing for release build: ${missing_secrets[*]}. Refusing to publish unnotarized macOS DMG."
               exit 1
@@ -429,19 +439,19 @@ jobs:
             exit 0
           fi
 
-          if [ ${#app_bundles[@]} -eq 0 ]; then
+          if [ "$app_bundles_count" -eq 0 ]; then
             echo "::error::No macOS .app bundle found to verify in cleaned bundle roots."
             print_bundle_root_listing
             exit 1
           fi
 
-          if [ ${#dmg_files[@]} -eq 0 ]; then
-            if [ ${#all_dmg_files[@]} -eq 0 ]; then
+          if [ "$dmg_files_count" -eq 0 ]; then
+            if [ "$all_dmg_files_count" -eq 0 ]; then
               echo "::error::No macOS .dmg files found to notarize in cleaned bundle roots."
             else
               echo "::error::Found macOS .dmg file(s), but none strictly match current version ${version}. Refusing to notarize stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
               echo "DMG filenames found:"
-              for dmg in "${all_dmg_files[@]}"; do
+              for dmg in "${all_dmg_files[@]+"${all_dmg_files[@]}"}"; do
                 echo "  $(basename "$dmg")"
               done
             fi
@@ -449,14 +459,14 @@ jobs:
             exit 1
           fi
 
-          for app in "${app_bundles[@]}"; do
+          for app in "${app_bundles[@]+"${app_bundles[@]}"}"; do
             echo "Verifying app bundle signature: $app"
             codesign --verify --deep --strict --verbose=4 "$app"
             spctl -a -vvv -t exec "$app" || echo "::warning::spctl app assessment did not pass before final DMG notarization: $app"
           done
 
           signed_app="${app_bundles[0]}"
-          for dmg in "${dmg_files[@]}"; do
+          for dmg in "${dmg_files[@]+"${dmg_files[@]}"}"; do
             echo "Recreating DMG from verified signed app bundle: $dmg"
             staging_dir="$(mktemp -d)"
             ditto "$signed_app" "$staging_dir/$(basename "$signed_app")"
@@ -471,7 +481,7 @@ jobs:
             rm -rf "$staging_dir"
           done
 
-          for dmg in "${dmg_files[@]}"; do
+          for dmg in "${dmg_files[@]+"${dmg_files[@]}"}"; do
             echo "Signing DMG: $dmg"
             codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
 

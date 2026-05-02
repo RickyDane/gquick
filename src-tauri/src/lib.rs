@@ -111,6 +111,26 @@ fn quit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn get_platform() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        "unknown"
+    }
+}
+
+#[tauri::command]
 fn create_note(
     state: tauri::State<'_, DbState>,
     title: String,
@@ -4219,10 +4239,12 @@ fn capture_region(
     width: u32,
     height: u32,
     mode: String,
+    ocr_engine: Option<String>,
 ) -> Result<String, String> {
+    let use_ai_ocr = mode == "ocr" && (cfg!(not(target_os = "macos")) || ocr_engine.as_deref() == Some("ai"));
     log_capture(&format!(
-        "capture_region called: x={} y={} w={} h={} mode={}",
-        x, y, width, height, mode
+        "capture_region called: x={} y={} w={} h={} mode={} ocr_engine={:?} use_ai_ocr={}",
+        x, y, width, height, mode, ocr_engine, use_ai_ocr
     ));
 
     // 1. Get monitor info while window is still visible
@@ -4346,7 +4368,7 @@ fn capture_region(
             } else {
                 log_capture("Screenshot copied to clipboard");
             }
-        } else if mode == "ocr" {
+        } else if mode == "ocr" && !use_ai_ocr {
             #[cfg(target_os = "macos")]
             {
                 let ocr_text = run_ocr(&app, &path);
@@ -4355,8 +4377,8 @@ fn capture_region(
                 let _ = app.clipboard().write_text(ocr_text.clone());
 
                 // Show notification with first 100 chars
-                let preview = if ocr_text.len() > 100 {
-                    format!("{}...", &ocr_text[..100])
+                let preview = if ocr_text.chars().count() > 100 {
+                    format!("{}...", ocr_text.chars().take(100).collect::<String>())
                 } else {
                     ocr_text.clone()
                 };
@@ -4366,27 +4388,27 @@ fn capture_region(
                 }
             }
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let image_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        log_capture(&format!(
-                            "OCR: read {} bytes, emitting ocr-image-ready",
-                            bytes.len()
-                        ));
-                        if let Err(e) = app.emit("ocr-image-ready", image_base64) {
-                            log_capture(&format!("Failed to emit ocr-image-ready: {}", e));
-                        }
+        } else if use_ai_ocr {
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let image_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    log_capture(&format!(
+                        "AI OCR: read {} bytes, emitting ocr-image-ready",
+                        bytes.len()
+                    ));
+                    if let Err(e) = app.emit("ocr-image-ready", image_base64) {
+                        let msg = format!("Failed to emit ocr-image-ready: {}", e);
+                        log_capture(&msg);
+                        return Err(msg);
                     }
-                    Err(e) => {
-                        log_capture(&format!("Failed to read captured image for OCR: {}", e));
-                        if let Err(emit_err) =
-                            app.emit("ocr-error", format!("Failed to read image: {}", e))
-                        {
-                            log_capture(&format!("Failed to emit ocr-error: {}", emit_err));
-                        }
+                }
+                Err(e) => {
+                    let msg = format!("Failed to read captured image for OCR: {}", e);
+                    log_capture(&msg);
+                    if let Err(emit_err) = app.emit("ocr-error", msg.clone()) {
+                        log_capture(&format!("Failed to emit ocr-error: {}", emit_err));
                     }
+                    return Err(msg);
                 }
             }
         }
@@ -4398,8 +4420,21 @@ fn capture_region(
         log_capture(&format!("capture_region FAILED: {}", e));
     }
 
-    // 4. Always close the window when done
-    let _ = window.close();
+    // 4. Close immediately for screenshots and native macOS OCR. For AI OCR
+    // on Windows/Linux, keep selector visible so frontend can show progress/errors.
+    let is_ai_ocr_path = use_ai_ocr;
+    let should_close_window = !is_ai_ocr_path;
+    log_capture(&format!(
+        "capture_region close decision: should_close_window={} mode={} is_ai_ocr_path={}",
+        should_close_window, mode, is_ai_ocr_path
+    ));
+
+    if should_close_window {
+        let _ = window.close();
+    } else {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 
     capture_result
 }
@@ -5162,7 +5197,8 @@ pub fn run() {
             }
             tauri::WindowEvent::Focused(false) => {
                 if window.label() == "selector" {
-                    let _ = window.close();
+                    // Selector has explicit close paths (Esc, success, error close).
+                    // Focus can move during screen capture/AI OCR, so keep it alive.
                 } else {
                     // Check if a dialog is open - don't hide window in that case
                     let app_handle = window.app_handle();
@@ -5181,6 +5217,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            get_platform,
             list_apps,
             get_network_info,
             request_wifi_permission,

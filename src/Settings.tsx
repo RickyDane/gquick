@@ -36,6 +36,8 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [quickNoteShortcut, setQuickNoteShortcut] = useState("CmdOrCtrl+Shift+N");
   const [searchNotesShortcut, setSearchNotesShortcut] = useState("CmdOrCtrl+Shift+S");
   const [uiLayout, setUiLayout] = useState<"default" | "compact">("default");
+  const [ocrEngine, setOcrEngine] = useState<"tesseract" | "ai">("tesseract");
+  const [isMacOs, setIsMacOs] = useState(false);
   const [isQuitDialogOpen, setIsQuitDialogOpen] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
   const [quitError, setQuitError] = useState("");
@@ -80,6 +82,17 @@ export default function Settings({ onClose }: { onClose: () => void }) {
     if (savedUiLayout === "default" || savedUiLayout === "compact") {
       setUiLayout(savedUiLayout);
     }
+
+    const savedOcrEngine = localStorage.getItem("ocr-engine");
+    if (savedOcrEngine === "tesseract" || savedOcrEngine === "ai") {
+      setOcrEngine(savedOcrEngine);
+    } else {
+      localStorage.setItem("ocr-engine", "tesseract");
+    }
+
+    invoke<string>("get_platform")
+      .then((platform) => setIsMacOs(platform === "macos"))
+      .catch(() => setIsMacOs(navigator.platform.toUpperCase().includes("MAC")));
 
     // Load cached models if available
     const cachedModels = localStorage.getItem(`models-${savedProvider || "openai"}`);
@@ -395,6 +408,26 @@ export default function Settings({ onClose }: { onClose: () => void }) {
               Shortcut to extract text from a selected region
             </p>
           </div>
+          {isMacOs && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-zinc-500 font-bold uppercase ml-1">OCR Engine</span>
+              <select
+                value={ocrEngine}
+                onChange={(e) => {
+                  const value = e.target.value as "tesseract" | "ai";
+                  setOcrEngine(value);
+                  localStorage.setItem("ocr-engine", value);
+                }}
+                className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500/50 transition-all appearance-none cursor-pointer"
+              >
+                <option value="tesseract">Tesseract OCR (faster)</option>
+                <option value="ai">AI OCR (better)</option>
+              </select>
+              <p className="text-[11px] text-zinc-500 ml-1">
+                macOS only. Windows/Linux always use AI OCR.
+              </p>
+            </div>
+          )}
           <div className="border-t border-white/5 pt-4 mt-2">
             <p className="text-[11px] text-zinc-500 font-bold uppercase ml-1 mb-3">Local Shortcuts (window focused)</p>
             <div className="flex flex-col gap-1.5">

@@ -7,14 +7,12 @@ import Settings from "./Settings";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
 import SearchSuggestions from "./components/SearchSuggestions";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
-import { performAiOcr } from "./utils/aiOcr";
 import { streamOpenAITools, streamOpenAIResponsesTools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
 import { getAllTools, executeTool, convertToolsForProvider, convertToolsForOpenAIResponses, convertMessagesToOpenAI, convertMessagesToOpenAIResponsesInput, convertMessagesToGemini, convertMessagesToAnthropic } from "./utils/toolManager";
 import { ToolCall } from "./plugins/types";
@@ -25,9 +23,22 @@ const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
 const LEFT_KEY_LOCATION = 1;
 const LAUNCHER_WINDOW_SIZE = { width: 760, height: 800 };
-const DOCKER_WINDOW_SIZE = { width: 1200, height: 860 };
 const LAUNCHER_MIN_WINDOW_HEIGHT = 140;
 const WINDOW_RESIZE_DEBOUNCE_MS = 80;
+
+/** Views that open in the expanded (larger) window. Add new views here. */
+const EXPANDED_WINDOW_VIEWS: Record<string, { width: number; height: number }> = {
+  docker: { width: 1200, height: 860 },
+  chat: { width: 1200, height: 860 },
+};
+
+function isExpandedView(view: string): boolean {
+  return view in EXPANDED_WINDOW_VIEWS;
+}
+
+function getExpandedWindowSize(view: string): { width: number; height: number } | null {
+  return EXPANDED_WINDOW_VIEWS[view] ?? null;
+}
 
 function isLeftShiftKeyEvent(e: KeyboardEvent): boolean {
   return e.key === "Shift" && (e.code === "ShiftLeft" || e.location === LEFT_KEY_LOCATION);
@@ -275,7 +286,7 @@ function App() {
   const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
   const [notesSearchQuery, setNotesSearchQuery] = useState("");
   const [dockerSearchQuery, setDockerSearchQuery] = useState("");
-  const appliedWindowModeRef = useRef<"launcher" | "docker" | null>(null);
+  const appliedWindowModeRef = useRef<"launcher" | "expanded" | null>(null);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
   const searchRequestIdRef = useRef(0);
   const latestSearchQueryRef = useRef(query);
@@ -444,12 +455,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const mode = view === "docker" ? "docker" : "launcher";
+    const expandedSize = getExpandedWindowSize(view);
+    const mode = expandedSize ? "expanded" : "launcher";
     if (appliedWindowModeRef.current === mode) return;
     appliedWindowModeRef.current = mode;
 
     const resizeWindow = async () => {
-      const size = mode === "docker" ? DOCKER_WINDOW_SIZE : LAUNCHER_WINDOW_SIZE;
+      const size = expandedSize ?? LAUNCHER_WINDOW_SIZE;
       const appWindow = getCurrentWindow();
       try {
         const launcherHeight = mode === "launcher"
@@ -467,8 +479,8 @@ function App() {
 
   useEffect(() => {
     const root = document.getElementById("root");
-    root?.classList.toggle("gquick-docker-root", view === "docker");
-    return () => root?.classList.remove("gquick-docker-root");
+    root?.classList.toggle("gquick-expanded-root", isExpandedView(view));
+    return () => root?.classList.remove("gquick-expanded-root");
   }, [view]);
 
   const scheduleLauncherResize = useCallback((nextHeight: number) => {
@@ -502,7 +514,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view === "docker") {
+    if (isExpandedView(view)) {
       if (launcherResizeTimerRef.current !== null) {
         window.clearTimeout(launcherResizeTimerRef.current);
         launcherResizeTimerRef.current = null;
@@ -574,30 +586,6 @@ function App() {
     return () => {
       disposed = true;
       unlisten?.();
-    };
-  }, []);
-
-  // Listen for AI OCR image ready (Windows/Linux)
-  useEffect(() => {
-    const promise = listen<string>("ocr-image-ready", async (event) => {
-      try {
-        const ocrText = await performAiOcr(event.payload);
-        if (!ocrText || ocrText.startsWith("Error:")) {
-          console.error("AI OCR failed:", ocrText || "Empty response");
-          return;
-        }
-        await writeText(ocrText);
-        console.log("AI OCR text copied to clipboard");
-        // Emit ocr-complete for consistency with macOS
-        const preview = ocrText.length > 100 ? `${ocrText.slice(0, 100)}...` : ocrText;
-        console.log("AI OCR result:", preview);
-      } catch (err) {
-        console.error("AI OCR error:", err);
-      }
-    });
-
-    return () => {
-      promise.then((unlisten) => unlisten()).catch(console.error);
     };
   }, []);
 
@@ -1617,7 +1605,7 @@ function App() {
       ref={launcherFrameRef}
       className={cn(
       "flex max-w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 ring-1 ring-white/10 backdrop-blur-3xl transition-all duration-200 relative",
-      view === "docker"
+      isExpandedView(view)
         ? "h-[calc(100vh-24px)] max-h-[calc(100vh-24px)] w-300 shadow-none"
         : "w-[min(680px,calc(100vw-24px))] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)]"
       )}
@@ -1791,7 +1779,7 @@ function App() {
       )}
 
       {view === "search" && !query && (localStorage.getItem("ui-layout") ?? "default") === "compact" ? null : (
-        <div className={cn("min-h-[40px] flex-1 overflow-hidden", view === "docker" && "min-h-0")}>
+        <div className={cn("min-h-[40px] flex-1 overflow-hidden flex flex-col", isExpandedView(view) && "min-h-0")}>
           {view === "settings" ? (
               <Settings onClose={() => setView("search")} />
             ) : view === "actions" ? (
@@ -1862,7 +1850,7 @@ function App() {
           ) : view === "docker" ? (
             <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
           ) : view === "chat" ? (
-            <div className="flex flex-col h-[300px]">
+            <div className={cn("flex flex-col", isExpandedView(view) ? "flex-1 overflow-hidden min-h-0" : "h-[300px]")}>
               <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
                 {notesContext && (
                   <div className="flex flex-col gap-1.5 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/10">
@@ -2097,9 +2085,9 @@ function App() {
         </div>
         <div
           className="flex shrink-0 items-center gap-2 cursor-pointer hover:text-zinc-300 transition-colors"
-          onClick={() => setView(view === "settings" || view === "actions" || view === "notes" || view === "docker" ? "search" : "settings")}
+          onClick={() => setView(view === "search" ? "settings" : "search")}
         >
-          <span>{view === "chat" ? "Search" : view === "settings" || view === "actions" || view === "notes" || view === "docker" ? "Back" : "GQuick"}</span>
+          <span>{view === "chat" ? "Search" : view === "search" ? "GQuick" : "Back"}</span>
           <SettingsIcon className="h-3.5 w-3.5" />
         </div>
       </div>

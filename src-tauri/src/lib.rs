@@ -4218,34 +4218,51 @@ fn capture_region(
     let app = window.app_handle();
 
     // 2. Hide the window immediately to clear the screen
+    // Block briefly to allow the compositor to fully hide our transparent
+    // window before capturing. Windows DWM needs a bit more time.
     let _ = window.hide();
+    #[cfg(target_os = "windows")]
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    #[cfg(not(target_os = "windows"))]
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     // 3. Do capture in a closure so we can clean up on error
     let capture_result = (|| -> Result<String, String> {
         let xcap_monitor = xcap_monitor_for_tauri_monitor(&tauri_monitor)?;
 
-        let image = xcap_monitor.capture_image().map_err(|e| e.to_string())?;
-
         // Convert logical coordinates to physical coordinates
-        let phys_x = (x as f64 * scale_factor).round() as u32;
-        let phys_y = (y as f64 * scale_factor).round() as u32;
+        let phys_x = (x as f64 * scale_factor).round() as i32;
+        let phys_y = (y as f64 * scale_factor).round() as i32;
         let phys_width = (width as f64 * scale_factor).round() as u32;
         let phys_height = (height as f64 * scale_factor).round() as u32;
 
-        // Ensure we don't exceed image bounds
-        let phys_x = phys_x.min(image.width());
-        let phys_y = phys_y.min(image.height());
-        let phys_width = phys_width.min(image.width() - phys_x);
-        let phys_height = phys_height.min(image.height() - phys_y);
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[capture_region] physical coords: x={} y={} w={} h={}",
+            phys_x, phys_y, phys_width, phys_height
+        );
+
+        // Clamp to monitor bounds
+        let monitor_width = xcap_monitor.width().map_err(|e| e.to_string())?;
+        let monitor_height = xcap_monitor.height().map_err(|e| e.to_string())?;
+        let phys_x = phys_x.max(0).min(monitor_width as i32) as u32;
+        let phys_y = phys_y.max(0).min(monitor_height as i32) as u32;
+        let phys_width = phys_width.min(monitor_width - phys_x);
+        let phys_height = phys_height.min(monitor_height - phys_y);
 
         if phys_width < 2 || phys_height < 2 {
             return Err("Selected region is too small".to_string());
         }
 
-        // Crop and Save
-        let cropped =
-            image::imageops::crop_imm(&image, phys_x, phys_y, phys_width, phys_height).to_image();
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[capture_region] clamped coords: x={} y={} w={} h={}",
+            phys_x, phys_y, phys_width, phys_height
+        );
+
+        let cropped = xcap_monitor
+            .capture_region(phys_x, phys_y, phys_width, phys_height)
+            .map_err(|e| e.to_string())?;
 
         let desktop_dir = dirs::desktop_dir().unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -4315,17 +4332,96 @@ fn capture_region(
     capture_result
 }
 
-fn xcap_monitor_for_tauri_monitor(tauri_monitor: &tauri::Monitor) -> Result<xcap::Monitor, String> {
+fn xcap_monitor_for_tauri_monitor(
+    tauri_monitor: &tauri::Monitor,
+) -> Result<xcap::Monitor, String> {
     let tauri_position = tauri_monitor.position();
     let tauri_size = tauri_monitor.size();
     let center_x = tauri_position.x + (tauri_size.width as i32 / 2);
     let center_y = tauri_position.y + (tauri_size.height as i32 / 2);
 
-    std::panic::catch_unwind(|| {
-        xcap::Monitor::from_point(center_x, center_y)
-            .expect("Could not find xcap monitor for selector monitor")
-    })
-    .map_err(|_| "Could not find xcap monitor for selector monitor".to_string())
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[capture_region] tauri monitor: pos=({},{}) size={}x{}",
+        tauri_position.x, tauri_position.y, tauri_size.width, tauri_size.height
+    );
+
+    // Strategy 1: Try from_point with center coordinates
+    if let Ok(monitor) = xcap::Monitor::from_point(center_x, center_y) {
+        let Ok(mx) = monitor.x() else { return Ok(monitor); };
+        let Ok(my) = monitor.y() else { return Ok(monitor); };
+        let Ok(mw) = monitor.width() else { return Ok(monitor); };
+        let Ok(mh) = monitor.height() else { return Ok(monitor); };
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[capture_region] strategy 1 matched: name={:?} pos=({},{}) size={}x{}",
+            monitor.name(),
+            mx, my, mw, mh
+        );
+        return Ok(monitor);
+    }
+
+    // Strategy 2: Exact match by position and size
+    let all_monitors =
+        xcap::Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
+    for monitor in &all_monitors {
+        let Ok(mx) = monitor.x() else { continue; };
+        let Ok(my) = monitor.y() else { continue; };
+        let Ok(mw) = monitor.width() else { continue; };
+        let Ok(mh) = monitor.height() else { continue; };
+
+        if mx == tauri_position.x
+            && my == tauri_position.y
+            && mw == tauri_size.width
+            && mh == tauri_size.height
+        {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[capture_region] strategy 2 matched: name={:?} pos=({},{}) size={}x{}",
+                monitor.name(),
+                mx, my, mw, mh
+            );
+            return Ok(monitor.clone());
+        }
+    }
+
+    // Strategy 3: Find monitor whose bounds contain the center point
+    for monitor in &all_monitors {
+        let Ok(mx) = monitor.x() else { continue; };
+        let Ok(my) = monitor.y() else { continue; };
+        let Ok(mw) = monitor.width() else { continue; };
+        let Ok(mh) = monitor.height() else { continue; };
+
+        let mright = mx + mw as i32;
+        let mbottom = my + mh as i32;
+        if center_x >= mx && center_x < mright && center_y >= my && center_y < mbottom {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[capture_region] strategy 3 matched: name={:?} pos=({},{}) size={}x{}",
+                monitor.name(),
+                mx, my, mw, mh
+            );
+            return Ok(monitor.clone());
+        }
+    }
+
+    // Strategy 4: Ultimate fallback to primary monitor
+    for monitor in &all_monitors {
+        let Ok(true) = monitor.is_primary() else { continue; };
+        let Ok(mx) = monitor.x() else { continue; };
+        let Ok(my) = monitor.y() else { continue; };
+        let Ok(mw) = monitor.width() else { continue; };
+        let Ok(mh) = monitor.height() else { continue; };
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[capture_region] strategy 4 fallback to primary: name={:?} pos=({},{}) size={}x{}",
+            monitor.name(),
+            mx, my, mw, mh
+        );
+        return Ok(monitor.clone());
+    }
+
+    Err("Could not find xcap monitor for selector monitor".to_string())
 }
 
 fn monitor_to_logical_geometry(

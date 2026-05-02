@@ -14,8 +14,6 @@ env:
 
 jobs:
   build:
-    environment:
-      name: Tauri v2.0
     permissions:
       contents: write
     strategy:

@@ -19,6 +19,7 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-unregister-all",
     "global-shortcut:default",
-    "updater:default"
+    "updater:default",
+    "process:default"
   ]
 }

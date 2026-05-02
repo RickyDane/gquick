@@ -1,6 +1,6 @@
 [package]
 name = "gquick"
-version = "0.1.1"
+version = "0.1.0"
 description = "A simple, fast and feature rich launcher"
 authors = ["Ricky Dane Perlick"]
 edition = "2021"
@@ -24,6 +24,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 xcap = "0.9"
 image = "0.25"
 serde = { version = "1", features = ["derive"] }

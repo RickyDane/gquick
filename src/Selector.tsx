@@ -4,6 +4,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+function log(msg: string) {
+  invoke("log_frontend", { message: msg }).catch(() => {});
+}
+
 export default function Selector() {
   const [start, setStart] = useState<{ x: number; y: number } | null>(null);
   const [current, setCurrent] = useState<{ x: number; y: number } | null>(null);
@@ -13,6 +17,7 @@ export default function Selector() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    log("Selector mounted");
     // Focus the Tauri window natively
     getCurrentWindow().setFocus();
     // Also focus the DOM
@@ -23,11 +28,13 @@ export default function Selector() {
     const params = new URLSearchParams(window.location.search);
     const initialMode = params.get("mode");
     if (initialMode) {
+      log("Initial mode: " + initialMode);
       setMode(initialMode);
     }
 
     // Listen for mode changes if window is reused
     const unlisten = listen<string>("set-mode", (event) => {
+      log("set-mode event: " + event.payload);
       setMode(event.payload);
       setIsCapturing(false);
       setStart(null);
@@ -42,6 +49,7 @@ export default function Selector() {
       if (e.key === "Escape" || e.code === "Escape") {
         e.preventDefault();
         e.stopPropagation();
+        log("Escape pressed, closing selector");
         // Use Rust command for reliable close
         invoke("close_selector").catch(() => {
           // Fallback
@@ -58,7 +66,11 @@ export default function Selector() {
   }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {
-    if (isCapturing) return;
+    if (isCapturing) {
+      log("mouseDown ignored: isCapturing=true");
+      return;
+    }
+    log("mouseDown: " + e.clientX + "," + e.clientY);
     setStart({ x: e.clientX, y: e.clientY });
     setCurrent({ x: e.clientX, y: e.clientY });
   };
@@ -70,11 +82,14 @@ export default function Selector() {
   };
 
   const onMouseUp = () => {
+    log("mouseUp fired");
     if (start && current && !isCapturing) {
       const x = Math.min(start.x, current.x);
       const y = Math.min(start.y, current.y);
       const width = Math.abs(start.x - current.x);
       const height = Math.abs(start.y - current.y);
+
+      log("mouseUp selection: x=" + x + " y=" + y + " w=" + width + " h=" + height);
 
       if (width > 2 && height > 2) {
         // Immediately hide selection div from DOM before capture
@@ -89,8 +104,11 @@ export default function Selector() {
           setCurrent(null);
         });
 
+        log("mouseUp: about to call capture_region in 100ms");
+
         // Wait for browser paint before invoking capture
         setTimeout(() => {
+          log("mouseUp: invoking capture_region");
           invoke("capture_region", {
             x: Math.floor(x),
             y: Math.floor(y),
@@ -99,11 +117,11 @@ export default function Selector() {
             mode: mode
           })
             .then((result) => {
-              console.log("Capture success:", result);
+              log("capture_region success: " + result);
               // Rust closes the window
             })
             .catch((err) => {
-              console.error("Capture failed:", err);
+              log("capture_region FAILED: " + err);
               setIsCapturing(false);
               // If it failed and didn't close, show it again
               getCurrentWindow().show();
@@ -111,12 +129,16 @@ export default function Selector() {
             });
         }, 100);
       } else {
+        log("mouseUp: region too small, resetting");
         setStart(null);
         setCurrent(null);
       }
     } else if (!isCapturing) {
-        setStart(null);
-        setCurrent(null);
+      log("mouseUp: no selection, resetting");
+      setStart(null);
+      setCurrent(null);
+    } else {
+      log("mouseUp ignored: isCapturing=true");
     }
   };
 

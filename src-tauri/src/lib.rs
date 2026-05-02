@@ -4832,7 +4832,13 @@ struct ImageAttachment {
 
 #[tauri::command]
 fn close_selector(window: tauri::Window) {
+    log_capture("close_selector called");
     let _ = window.close();
+}
+
+#[tauri::command]
+fn log_frontend(message: String) {
+    log_capture(&format!("[frontend] {}", message));
 }
 
 #[tauri::command]
@@ -5185,6 +5191,7 @@ pub fn run() {
             update_ocr_shortcut,
             open_image_dialog,
             close_selector,
+            log_frontend,
             create_note,
             get_notes,
             update_note,

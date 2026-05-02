@@ -13,9 +13,101 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
-  build:
+  prepare-release:
+    outputs:
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      should_publish_release: ${{ steps.release.outputs.should_publish_release }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
     permissions:
       contents: write
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-tag-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate app versions and prepare release tag
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          tag="v${package_version}"
+
+          if [ "$package_version" != "$tauri_version" ]; then
+            echo "::error::Version mismatch: package.json has $package_version but src-tauri/tauri.conf.json has $tauri_version. Keep them in sync so release artifact filtering finds the current Tauri bundles."
+            exit 1
+          fi
+
+          echo "release_tag=" >> "$GITHUB_OUTPUT"
+          echo "should_publish_release=false" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+
+          case "$tag" in
+            *-alpha*|*-beta*|*-rc*) echo "is_prerelease=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+          if [ "$REF_TYPE" = "tag" ]; then
+            if [ "$REF_NAME" != "$tag" ]; then
+              echo "::error::Tag mismatch: workflow tag is $REF_NAME but package.json version requires $tag."
+              exit 1
+            fi
+
+            echo "release_tag=${tag}" >> "$GITHUB_OUTPUT"
+            if [ "$EVENT_NAME" = "push" ]; then
+              echo "should_publish_release=true" >> "$GITHUB_OUTPUT"
+            fi
+            echo "Using release tag ${tag} from tag push."
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" != "push" ] || [ "$REF_TYPE" != "branch" ]; then
+            echo "Validated ${tag}; non-push or non-branch run will build without publishing."
+            exit 0
+          fi
+
+          git fetch --force origin "+refs/tags/${tag}:refs/tags/${tag}" || true
+
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+            head_commit="$(git rev-parse HEAD)"
+            if [ "$tag_commit" != "$head_commit" ]; then
+              echo "::error::Release tag ${tag} already exists but points to ${tag_commit}, not current HEAD ${head_commit}. Bump version or move the tag intentionally outside this workflow."
+              exit 1
+            fi
+            echo "Release tag ${tag} already exists on current HEAD; publishing from this workflow run."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release ${tag}"
+            git push origin "$tag"
+            echo "Created and pushed release tag ${tag} from ${BRANCH_NAME}; publishing from this workflow run."
+          fi
+
+          echo "release_tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "should_publish_release=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare-release
+    if: github.event_name != 'push' || needs.prepare-release.outputs.release_tag != '' || github.ref_type == 'branch'
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -37,26 +129,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Create version tag
-        if: github.event_name == 'push' && github.ref_type == 'branch'
+      - name: Validate app versions match
+        id: validate_versions
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v${VERSION}"
-          echo "VERSION=${TAG}" >> "$GITHUB_OUTPUT"
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          expected_tag="v${package_version}"
 
-          # Check if tag exists locally or on remote
-          if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            echo "Tag ${TAG} already exists, skipping creation."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "Release ${TAG}"
-            git push origin "$TAG"
-            echo "Created and pushed tag ${TAG}"
+          if [ "$package_version" != "$tauri_version" ]; then
+            echo "::error::Version mismatch: package.json has $package_version but src-tauri/tauri.conf.json has $tauri_version. Keep them in sync so release artifact filtering finds the current Tauri bundles."
+            exit 1
           fi
-        id: create_tag
+
+          if [ "$REF_TYPE" = "tag" ] && [ "$REF_NAME" != "$expected_tag" ]; then
+            echo "::error::Tag mismatch: workflow tag is $REF_NAME but package.json version requires $expected_tag."
+            exit 1
+          fi
+
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${expected_tag}" >> "$GITHUB_OUTPUT"
+          echo "Validated release version: $package_version"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -129,19 +227,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Validate app versions match
-        shell: bash
-        run: |
-          package_version="$(node -p "require('./package.json').version")"
-          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-
-          if [ "$package_version" != "$tauri_version" ]; then
-            echo "::error::Version mismatch: package.json has $package_version but src-tauri/tauri.conf.json has $tauri_version. Keep them in sync so release artifact filtering finds the current Tauri bundles."
-            exit 1
-          fi
-
-          echo "Validated release version: $package_version"
-
       - name: Clean cached bundle artifacts
         shell: bash
         run: |
@@ -176,9 +261,21 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SHOULD_PUBLISH_RELEASE: ${{ needs.prepare-release.outputs.should_publish_release }}
         run: |
-          if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "::warning::APPLE_CERTIFICATE is empty. Skipping code signing validation."
+          missing_secrets=()
+          for secret_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+            if [ -z "${!secret_name:-}" ]; then
+              missing_secrets+=("$secret_name")
+            fi
+          done
+
+          if [ ${#missing_secrets[@]} -gt 0 ]; then
+            if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Apple signing secrets are missing for release build: ${missing_secrets[*]}. Refusing to build unsigned macOS release artifacts."
+              exit 1
+            fi
+            echo "::warning::Apple signing secrets are missing (${missing_secrets[*]}). Skipping code signing validation for non-release build."
             echo "signing_available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -230,15 +327,29 @@ jobs:
       - name: Verify and notarize macOS DMG
         if: matrix.os_name == 'macos-arm'
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SHOULD_PUBLISH_RELEASE: ${{ needs.prepare-release.outputs.should_publish_release }}
         run: |
           set -euo pipefail
 
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ] || [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
-            echo "::warning::Apple signing/notarization secrets are missing. Skipping final DMG notarization."
+          missing_secrets=()
+          for secret_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!secret_name:-}" ]; then
+              missing_secrets+=("$secret_name")
+            fi
+          done
+
+          if [ ${#missing_secrets[@]} -gt 0 ]; then
+            if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Apple signing/notarization secrets are missing for release build: ${missing_secrets[*]}. Refusing to publish unnotarized macOS DMG."
+              exit 1
+            fi
+            echo "::warning::Apple signing/notarization secrets are missing (${missing_secrets[*]}). Skipping final DMG notarization for non-release build."
             exit 0
           fi
 
@@ -364,7 +475,6 @@ jobs:
             /\.AppImage\.sig$/,
             /\.AppImage\.tar\.gz$/,
             /\.AppImage\.tar\.gz\.sig$/,
-            /\.dmg\.sig$/,
             /\.msi\.sig$/,
             /\.exe\.sig$/,
             /\.nsis\.zip$/,
@@ -424,22 +534,109 @@ jobs:
         with:
           name: gquick-${{ matrix.os_name }}
           path: release-artifacts/${{ matrix.os_name }}/*
-          if-no-files-found: warn
+          if-no-files-found: error
 
       # ------------------------------------------------------------------
-      # Release (tag builds + auto-tagged main builds)
+      # Release artifacts are published once by publish-release after matrix builds finish.
       # ------------------------------------------------------------------
 
-      - name: Create draft release
-        if: github.event_name == 'push' && github.ref_type != 'pull_request'
+  publish-release:
+    if: github.event_name == 'push' && needs.prepare-release.outputs.should_publish_release == 'true' && needs.prepare-release.outputs.release_tag != ''
+    needs:
+      - prepare-release
+      - build
+    permissions:
+      contents: write
+    concurrency:
+      group: release-mutate-${{ needs.prepare-release.outputs.release_tag }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download staged build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gquick-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Validate release artifact names
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return [];
+            return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+              const fullPath = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(fullPath) : [fullPath];
+            });
+          }
+
+          const files = walk('artifacts');
+          if (files.length === 0) {
+            console.error('No downloaded release artifacts found.');
+            process.exit(1);
+          }
+
+          const byName = new Map();
+          for (const file of files) {
+            const basename = path.basename(file);
+            const existing = byName.get(basename);
+            if (existing) {
+              console.error(`Duplicate release artifact basename: ${basename}`);
+              console.error(`  ${existing}`);
+              console.error(`  ${file}`);
+              process.exit(1);
+            }
+            byName.set(basename, file);
+          }
+
+          fs.rmSync('publish-artifacts', { recursive: true, force: true });
+          fs.mkdirSync('publish-artifacts', { recursive: true });
+          for (const [basename, file] of byName) {
+            fs.copyFileSync(file, path.join('publish-artifacts', basename));
+            console.log(`Prepared ${file} -> publish-artifacts/${basename}`);
+          }
+          NODE
+
+      - name: Delete existing release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          release_json="$(gh release view "$RELEASE_TAG" --json assets 2>/dev/null || true)"
+          if [ -z "$release_json" ]; then
+            echo "Release ${RELEASE_TAG} does not exist yet; no assets to delete."
+            exit 0
+          fi
+
+          asset_ids="$(printf '%s' "$release_json" | jq -r '.assets[].databaseId')"
+          if [ -z "$asset_ids" ]; then
+            echo "Release ${RELEASE_TAG} has no existing assets."
+            exit 0
+          fi
+
+          while IFS= read -r asset_id; do
+            if [ -n "$asset_id" ]; then
+              echo "Deleting existing release asset ${asset_id}"
+              gh api --method DELETE "repos/${{ github.repository }}/releases/assets/${asset_id}"
+            fi
+          done <<< "$asset_ids"
+
+      - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          prerelease: ${{ contains(steps.create_tag.outputs.VERSION, '-beta') || contains(steps.create_tag.outputs.VERSION, '-alpha') || contains(steps.create_tag.outputs.VERSION, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
-          name: GQuick ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
-          tag_name: ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
+          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
+          name: GQuick ${{ needs.prepare-release.outputs.release_tag }}
+          tag_name: ${{ needs.prepare-release.outputs.release_tag }}
           generate_release_notes: true
-          files: release-artifacts/${{ matrix.os_name }}/*
+          files: publish-artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -447,145 +644,154 @@ jobs:
   # Generate latest.json for Tauri updater
   # ------------------------------------------------------------------
   generate-latest-json:
-    if: github.event_name == 'push' && github.ref_type != 'pull_request'
-    needs: build
+    if: github.event_name == 'push' && needs.prepare-release.outputs.should_publish_release == 'true' && needs.prepare-release.outputs.release_tag != ''
+    needs:
+      - prepare-release
+      - publish-release
     permissions:
       contents: write
+    concurrency:
+      group: release-mutate-${{ needs.prepare-release.outputs.release_tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Determine version
         id: version
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="v$(node -p "require('./package.json').version")"
-          fi
+          VERSION="${{ needs.prepare-release.outputs.release_tag }}"
           echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: gquick-*
           path: artifacts
-          merge-multiple: true
+          merge-multiple: false
+
+      - name: Validate latest.json artifact names
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return [];
+            return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+              const fullPath = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(fullPath) : [fullPath];
+            });
+          }
+
+          const files = walk('artifacts');
+          if (files.length === 0) {
+            console.error('No downloaded artifacts found for latest.json.');
+            process.exit(1);
+          }
+
+          const byName = new Map();
+          for (const file of files) {
+            const basename = path.basename(file);
+            const existing = byName.get(basename);
+            if (existing) {
+              console.error(`Duplicate artifact basename for latest.json: ${basename}`);
+              console.error(`  ${existing}`);
+              console.error(`  ${file}`);
+              process.exit(1);
+            }
+            byName.set(basename, file);
+          }
+
+          console.log(`Validated ${files.length} downloaded artifact files with unique basenames.`);
+          NODE
 
       - name: Generate latest.json
         id: latest
         run: |
           set -euo pipefail
 
-          TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.version }}"
-          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
 
-          echo "Generating latest.json for ${TAG}..."
+          const tag = '${{ steps.version.outputs.tag }}';
+          const version = '${{ steps.version.outputs.version }}';
+          const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+          const baseUrl = `https://github.com/${{ github.repository }}/releases/download/${tag}`;
 
-          # Find .sig files and their corresponding update bundles
-          declare -A PLATFORM_MAP
-          PLATFORM_MAP["darwin-aarch64"]=""
-          PLATFORM_MAP["darwin-x86_64"]=""
-          PLATFORM_MAP["linux-x86_64"]=""
-          PLATFORM_MAP["windows-x86_64"]=""
+          const expectedBundles = [
+            { platform: 'darwin-aarch64', bundlePattern: /\.app\.tar\.gz$/, sigPattern: /\.app\.tar\.gz\.sig$/ },
+            { platform: 'linux-x86_64', bundlePattern: /\.AppImage\.tar\.gz$/, sigPattern: /\.AppImage\.tar\.gz\.sig$/ },
+            { platform: 'windows-x86_64', bundlePattern: /\.nsis\.zip$/, sigPattern: /\.nsis\.zip\.sig$/ },
+          ];
 
-          # macOS: look for .app.tar.gz and .app.tar.gz.sig
-          MAC_SIG=$(find artifacts -name "*.app.tar.gz.sig" -type f | head -1)
-          MAC_BUNDLE=$(find artifacts -name "*.app.tar.gz" -not -name "*.sig" -type f | head -1)
-          if [ -n "$MAC_SIG" ] && [ -n "$MAC_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$MAC_SIG")
-            BUNDLE_NAME=$(basename "$MAC_BUNDLE")
-            PLATFORM_MAP["darwin-aarch64"]="$(cat <<EOF
-            "darwin-aarch64": {
-              "signature": "${SIG_CONTENT}",
-              "url": "${BASE_URL}/${BUNDLE_NAME}"
-            }
-          EOF
-            )"
-            echo "Found macOS update bundle: ${BUNDLE_NAME}"
-          else
-            echo "::warning::No macOS update bundle found"
-          fi
-
-          # Linux: Tauri v2 reuses the normal AppImage as the update bundle.
-          LINUX_SIG=$(find artifacts -name "*.AppImage.sig" -type f | head -1)
-          LINUX_BUNDLE=$(find artifacts -name "*.AppImage" -not -name "*.sig" -type f | head -1)
-          if [ -n "$LINUX_SIG" ] && [ -n "$LINUX_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$LINUX_SIG")
-            BUNDLE_NAME=$(basename "$LINUX_BUNDLE")
-            PLATFORM_MAP["linux-x86_64"]="$(cat <<EOF
-            "linux-x86_64": {
-              "signature": "${SIG_CONTENT}",
-              "url": "${BASE_URL}/${BUNDLE_NAME}"
-            }
-          EOF
-            )"
-            echo "Found Linux update bundle: ${BUNDLE_NAME}"
-          else
-            echo "::warning::No Linux update bundle found"
-          fi
-
-          # Windows: Tauri v2 reuses the normal NSIS .exe or MSI installer as the update bundle.
-          # Prefer NSIS because it matches the user-facing installer asset.
-          WIN_SIG=$(find artifacts -name "*-setup.exe.sig" -type f | head -1)
-          WIN_BUNDLE=$(find artifacts -name "*-setup.exe" -not -name "*.sig" -type f | head -1)
-          if [ -z "$WIN_SIG" ] || [ -z "$WIN_BUNDLE" ]; then
-            WIN_SIG=$(find artifacts -name "*.msi.sig" -type f | head -1)
-            WIN_BUNDLE=$(find artifacts -name "*.msi" -not -name "*.sig" -type f | head -1)
-          fi
-          if [ -n "$WIN_SIG" ] && [ -n "$WIN_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$WIN_SIG")
-            BUNDLE_NAME=$(basename "$WIN_BUNDLE")
-            PLATFORM_MAP["windows-x86_64"]="$(cat <<EOF
-            "windows-x86_64": {
-              "signature": "${SIG_CONTENT}",
-              "url": "${BASE_URL}/${BUNDLE_NAME}"
-            }
-          EOF
-            )"
-            echo "Found Windows update bundle: ${BUNDLE_NAME}"
-          else
-            echo "::warning::No Windows update bundle found"
-          fi
-
-          # Build platforms JSON (only include platforms with bundles)
-          PLATFORMS=""
-          for platform in darwin-aarch64 linux-x86_64 windows-x86_64; do
-            if [ -n "${PLATFORM_MAP[$platform]}" ]; then
-              if [ -n "$PLATFORMS" ]; then
-                PLATFORMS="${PLATFORMS},"
-              fi
-              PLATFORMS="${PLATFORMS}${PLATFORM_MAP[$platform]}"
-            fi
-          done
-
-          if [ -z "$PLATFORMS" ]; then
-            echo "::error::No update bundles found for any platform"
-            exit 1
-          fi
-
-          # Write latest.json
-          cat > latest.json <<EOF
-          {
-            "version": "${VERSION}",
-            "notes": "See release notes for details",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              ${PLATFORMS}
-            }
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return [];
+            return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+              const fullPath = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(fullPath) : [fullPath];
+            });
           }
-          EOF
 
-          echo "Generated latest.json:"
-          cat latest.json | jq .
+          const files = walk('artifacts');
+          const byBasename = new Map(files.map((file) => [path.basename(file), file]));
+          const platforms = {};
+
+          for (const { platform, bundlePattern, sigPattern } of expectedBundles) {
+            const bundles = files.filter((file) => bundlePattern.test(path.basename(file)));
+            if (bundles.length !== 1) {
+              console.error(`Expected exactly one ${platform} updater bundle matching ${bundlePattern}, found ${bundles.length}.`);
+              for (const bundle of bundles) console.error(`  ${bundle}`);
+              process.exit(1);
+            }
+
+            const signatures = files.filter((file) => sigPattern.test(path.basename(file)));
+            if (signatures.length !== 1) {
+              console.error(`Expected exactly one ${platform} updater signature matching ${sigPattern}, found ${signatures.length}.`);
+              for (const signature of signatures) console.error(`  ${signature}`);
+              process.exit(1);
+            }
+
+            const bundle = bundles[0];
+            const bundleName = path.basename(bundle);
+            const sigName = `${bundleName}.sig`;
+            const sigPath = byBasename.get(sigName);
+            if (!sigPath) {
+              console.error(`Missing updater signature pair for ${platform}: expected ${sigName}.`);
+              process.exit(1);
+            }
+
+            platforms[platform] = {
+              signature: fs.readFileSync(sigPath, 'utf8').trim(),
+              url: `${baseUrl}/${encodeURIComponent(bundleName)}`,
+            };
+            console.log(`Found ${platform} updater bundle: ${bundleName}`);
+          }
+
+          const latest = {
+            version,
+            notes: 'See release notes for details',
+            pub_date: pubDate,
+            platforms,
+          };
+
+          fs.writeFileSync('latest.json', `${JSON.stringify(latest, null, 2)}\n`);
+          console.log('Generated latest.json:');
+          console.log(JSON.stringify(latest, null, 2));
+          NODE
+
+          jq . latest.json
 
       - name: Upload latest.json to release
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           tag_name: ${{ steps.version.outputs.tag }}
           files: latest.json
         env:
@@ -596,7 +802,7 @@ jobs:
   # ------------------------------------------------------------------
   deploy-pages:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    needs: build
+    needs: prepare-release
     permissions:
       contents: read
       pages: write
@@ -611,6 +817,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

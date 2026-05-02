@@ -61,7 +61,7 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 
 ### Chat & AI
 - **Multi-Provider Support** — Connect to your preferred AI provider:
-  - OpenAI (GPT-4, GPT-4o, etc.)
+  - OpenAI (GPT-5.*, etc.)
   - Google Gemini
   - Anthropic Claude
 - **Streaming Responses** — Real-time streaming for a smooth chat experience
@@ -368,7 +368,6 @@ The workflow (`.github/workflows/build.yml`) triggers on:
 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `.deb`, `.rpm`, `.AppImage` |
 | `windows-latest` | `x86_64-pc-windows-msvc` | `.msi`, `.exe` |
 | `macos-latest` | `aarch64-apple-darwin` | `.dmg` (Apple Silicon) |
-| `macos-13` | `x86_64-apple-darwin` | `.dmg` (Intel) |
 
 ---
 

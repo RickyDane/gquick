@@ -129,6 +129,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Clean cached bundle artifacts
+        shell: bash
+        run: |
+          rm -rf "src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -rf "release-artifacts/${{ matrix.os_name }}"
+
       - name: Debug signing secret access
         if: matrix.os_name == 'macos-arm'
         env:
@@ -312,6 +318,76 @@ jobs:
             spctl -a -vvv -t open --context context:primary-signature "$dmg"
           done
 
+      - name: Stage current build artifacts
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const sourceRoot = path.join('src-tauri', 'target', '${{ matrix.target }}', 'release', 'bundle');
+          const outputRoot = path.join('release-artifacts', '${{ matrix.os_name }}');
+          const allowedPatterns = [
+            /\.dmg$/,
+            /\.msi$/,
+            /\.exe$/,
+            /\.deb$/,
+            /\.rpm$/,
+            /\.AppImage$/,
+            /\.AppImage\.sig$/,
+            /\.AppImage\.tar\.gz$/,
+            /\.AppImage\.tar\.gz\.sig$/,
+            /\.dmg\.sig$/,
+            /\.msi\.sig$/,
+            /\.exe\.sig$/,
+            /\.nsis\.zip$/,
+            /\.nsis\.zip\.sig$/,
+            /\.app\.tar\.gz$/,
+            /\.app\.tar\.gz\.sig$/,
+          ];
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return [];
+            return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+              const fullPath = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(fullPath) : [fullPath];
+            });
+          }
+
+          fs.rmSync(outputRoot, { recursive: true, force: true });
+          fs.mkdirSync(outputRoot, { recursive: true });
+
+          const artifacts = walk(sourceRoot).filter((file) => {
+            const normalized = file.split(path.sep).join('/');
+            return allowedPatterns.some((pattern) => pattern.test(normalized));
+          });
+
+          if (artifacts.length === 0) {
+            console.error(`No releasable artifacts found in ${sourceRoot}`);
+            process.exit(1);
+          }
+
+          const destinations = new Map();
+          for (const artifact of artifacts) {
+            const destination = path.join(outputRoot, path.basename(artifact));
+            const existing = destinations.get(destination);
+            if (existing) {
+              console.error(`Duplicate staged artifact destination: ${destination}`);
+              console.error(`  ${existing}`);
+              console.error(`  ${artifact}`);
+              process.exit(1);
+            }
+            destinations.set(destination, artifact);
+          }
+
+          for (const artifact of artifacts) {
+            const destination = path.join(outputRoot, path.basename(artifact));
+            fs.copyFileSync(artifact, destination);
+            console.log(`Staged ${artifact} -> ${destination}`);
+          }
+          NODE
+
       # ------------------------------------------------------------------
       # Upload artifacts (CI builds)
       # ------------------------------------------------------------------
@@ -321,23 +397,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gquick-${{ matrix.os_name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          path: release-artifacts/${{ matrix.os_name }}/*
           if-no-files-found: warn
 
       # ------------------------------------------------------------------
@@ -353,23 +413,7 @@ jobs:
           name: GQuick ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
           tag_name: ${{ steps.create_tag.outputs.VERSION || github.ref_name }}
           generate_release_notes: true
-          files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          files: release-artifacts/${{ matrix.os_name }}/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

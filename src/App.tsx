@@ -18,6 +18,7 @@ import { getAllTools, executeTool, convertToolsForProvider, convertToolsForOpenA
 import { ToolCall } from "./plugins/types";
 import { getSavedLocation } from "./utils/location";
 import { recordUsage, getRecentItems } from "./utils/usageTracker";
+import UpdateModal from "./components/UpdateModal";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
@@ -286,6 +287,9 @@ function App() {
   const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
   const [notesSearchQuery, setNotesSearchQuery] = useState("");
   const [dockerSearchQuery, setDockerSearchQuery] = useState("");
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [autoCheckUpdateInfo, setAutoCheckUpdateInfo] = useState<{ version: string; body: string | null } | null>(null);
+  const [autoCheckUpdateObj, setAutoCheckUpdateObj] = useState<any>(null);
   const appliedWindowModeRef = useRef<"launcher" | "expanded" | null>(null);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
   const searchRequestIdRef = useRef(0);
@@ -362,6 +366,24 @@ function App() {
       }
     };
     syncShortcuts();
+  }, []);
+
+  // Auto-check for updates on startup (delayed to not slow down app launch)
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const { checkForUpdates } = await import("./utils/updater");
+        const result = await checkForUpdates();
+        if (result.available && result.info && result.update) {
+          setAutoCheckUpdateInfo(result.info);
+          setAutoCheckUpdateObj(result.update);
+          setIsUpdateModalOpen(true);
+        }
+      } catch {
+        // silently fail - don't bother user if check fails
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -2091,6 +2113,20 @@ function App() {
             <SearchSuggestions ref={suggestionsRef} activeIndex={activeSuggestionIndex} onSelectQuery={handleSelectQuery} onOpenView={handleOpenView} onOpenApp={handleOpenApp} onOpenFile={handleOpenFile} />
           ) : null}
         </div>
+      )}
+
+      {isUpdateModalOpen && (
+        <UpdateModal
+          isOpen={isUpdateModalOpen}
+          onClose={() => {
+            setIsUpdateModalOpen(false);
+            setAutoCheckUpdateInfo(null);
+            setAutoCheckUpdateObj(null);
+          }}
+          autoCheck
+          initialInfo={autoCheckUpdateInfo ?? undefined}
+          initialUpdate={autoCheckUpdateObj ?? undefined}
+        />
       )}
 
       <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/5 bg-zinc-950/40 px-4 py-2 text-[11px] font-medium text-zinc-500">

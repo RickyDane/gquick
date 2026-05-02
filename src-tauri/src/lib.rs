@@ -5086,6 +5086,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Hide dock icon on macOS, keep only tray icon
             #[cfg(target_os = "macos")]

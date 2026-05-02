@@ -328,6 +328,15 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
           if-no-files-found: warn
 
       # ------------------------------------------------------------------
@@ -350,6 +359,158 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.tar.gz.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # Generate latest.json for Tauri updater
+  # ------------------------------------------------------------------
+  generate-latest-json:
+    if: github.event_name == 'push' && github.ref_type != 'pull_request'
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate latest.json
+        id: latest
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+          echo "Generating latest.json for ${TAG}..."
+
+          # Find .sig files and their corresponding update bundles
+          declare -A PLATFORM_MAP
+          PLATFORM_MAP["darwin-aarch64"]=""
+          PLATFORM_MAP["darwin-x86_64"]=""
+          PLATFORM_MAP["linux-x86_64"]=""
+          PLATFORM_MAP["windows-x86_64"]=""
+
+          # macOS: look for .app.tar.gz and .app.tar.gz.sig
+          MAC_SIG=$(find artifacts -name "*.app.tar.gz.sig" -type f | head -1)
+          MAC_BUNDLE=$(find artifacts -name "*.app.tar.gz" -not -name "*.sig" -type f | head -1)
+          if [ -n "$MAC_SIG" ] && [ -n "$MAC_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$MAC_SIG")
+            BUNDLE_NAME=$(basename "$MAC_BUNDLE")
+            PLATFORM_MAP["darwin-aarch64"]="$(cat <<EOF
+            "darwin-aarch64": {
+              "signature": "${SIG_CONTENT}",
+              "url": "${BASE_URL}/${BUNDLE_NAME}"
+            }
+          EOF
+            )"
+            echo "Found macOS update bundle: ${BUNDLE_NAME}"
+          else
+            echo "::warning::No macOS update bundle found"
+          fi
+
+          # Linux: look for .AppImage.tar.gz and .AppImage.tar.gz.sig
+          LINUX_SIG=$(find artifacts -name "*.AppImage.tar.gz.sig" -type f | head -1)
+          LINUX_BUNDLE=$(find artifacts -name "*.AppImage.tar.gz" -not -name "*.sig" -type f | head -1)
+          if [ -n "$LINUX_SIG" ] && [ -n "$LINUX_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$LINUX_SIG")
+            BUNDLE_NAME=$(basename "$LINUX_BUNDLE")
+            PLATFORM_MAP["linux-x86_64"]="$(cat <<EOF
+            "linux-x86_64": {
+              "signature": "${SIG_CONTENT}",
+              "url": "${BASE_URL}/${BUNDLE_NAME}"
+            }
+          EOF
+            )"
+            echo "Found Linux update bundle: ${BUNDLE_NAME}"
+          else
+            echo "::warning::No Linux update bundle found"
+          fi
+
+          # Windows: look for .nsis.zip and .nsis.zip.sig
+          WIN_SIG=$(find artifacts -name "*.nsis.zip.sig" -type f | head -1)
+          WIN_BUNDLE=$(find artifacts -name "*.nsis.zip" -not -name "*.sig" -type f | head -1)
+          if [ -n "$WIN_SIG" ] && [ -n "$WIN_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$WIN_SIG")
+            BUNDLE_NAME=$(basename "$WIN_BUNDLE")
+            PLATFORM_MAP["windows-x86_64"]="$(cat <<EOF
+            "windows-x86_64": {
+              "signature": "${SIG_CONTENT}",
+              "url": "${BASE_URL}/${BUNDLE_NAME}"
+            }
+          EOF
+            )"
+            echo "Found Windows update bundle: ${BUNDLE_NAME}"
+          else
+            echo "::warning::No Windows update bundle found"
+          fi
+
+          # Build platforms JSON (only include platforms with bundles)
+          PLATFORMS=""
+          for platform in darwin-aarch64 linux-x86_64 windows-x86_64; do
+            if [ -n "${PLATFORM_MAP[$platform]}" ]; then
+              if [ -n "$PLATFORMS" ]; then
+                PLATFORMS="${PLATFORMS},"
+              fi
+              PLATFORMS="${PLATFORMS}${PLATFORM_MAP[$platform]}"
+            fi
+          done
+
+          if [ -z "$PLATFORMS" ]; then
+            echo "::error::No update bundles found for any platform"
+            exit 1
+          fi
+
+          # Write latest.json
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See release notes for details",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              ${PLATFORMS}
+            }
+          }
+          EOF
+
+          echo "Generated latest.json:"
+          cat latest.json | jq .
+
+      - name: Upload latest.json to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

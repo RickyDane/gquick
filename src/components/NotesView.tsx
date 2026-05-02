@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "../utils/cn";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ConfirmModal } from "./ConfirmModal";
 
 export interface Note {
   id: number;
@@ -49,6 +50,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const hasHandledInitialNote = useRef(false);
 
   useEffect(() => {
@@ -129,12 +131,18 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this note?")) return;
+    setDeleteTargetId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (deleteTargetId === null) return;
     try {
-      await invoke("delete_note", { id });
+      await invoke("delete_note", { id: deleteTargetId });
       fetchNotes();
     } catch (e) {
       console.error("Failed to delete note:", e);
+    } finally {
+      setDeleteTargetId(null);
     }
   };
 
@@ -286,6 +294,14 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={deleteTargetId !== null}
+        title="Delete Note"
+        message="Are you sure you want to delete this note? This action cannot be undone."
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTargetId(null)}
+      />
     </div>
   );
 }

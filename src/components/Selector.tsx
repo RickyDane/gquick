@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { performAiOcrResult } from "../utils/aiOcr";
 
-const AI_OCR_TIMEOUT_MS = 10_000;
+const AI_OCR_TIMEOUT_MS = 45_000;
 const UNKNOWN_AI_OCR_ERROR = "AI OCR failed for an unknown reason. Check logs for details.";
 
 /* ── Extraction animation keyframes (injected once) ─────────────────────── */
@@ -225,7 +225,7 @@ export default function Selector() {
   const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("AI OCR timed out after 10 seconds.")), timeoutMs);
+      timeoutId = setTimeout(() => reject(new Error("AI OCR timed out after 45 seconds.")), timeoutMs);
     });
 
     try {

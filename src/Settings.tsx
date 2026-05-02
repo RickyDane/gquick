@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle, MapPin, X } from "lucide-react";
+import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle, MapPin, X, Download, RefreshCw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import ShortcutRecorder from "./components/ShortcutRecorder";
 import { getSavedLocation, saveLocation, clearSavedLocation, SavedLocation, searchLocations } from "./utils/location";
+import UpdateModal from "./components/UpdateModal";
 
 interface Model {
   id: string;
@@ -38,6 +40,8 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [uiLayout, setUiLayout] = useState<"default" | "compact">("default");
   const [ocrEngine, setOcrEngine] = useState<"tesseract" | "ai">("tesseract");
   const [isMacOs, setIsMacOs] = useState(false);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("0.1.0");
   const [isQuitDialogOpen, setIsQuitDialogOpen] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
   const [quitError, setQuitError] = useState("");
@@ -93,6 +97,11 @@ export default function Settings({ onClose }: { onClose: () => void }) {
     invoke<string>("get_platform")
       .then((platform) => setIsMacOs(platform === "macos"))
       .catch(() => setIsMacOs(navigator.platform.toUpperCase().includes("MAC")));
+
+    // Fetch app version
+    getVersion()
+      .then((version) => setAppVersion(version))
+      .catch(() => {});
 
     // Load cached models if available
     const cachedModels = localStorage.getItem(`models-${savedProvider || "openai"}`);
@@ -652,6 +661,26 @@ export default function Settings({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </div>
+
+        {/* Updates */}
+        <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <Download className="h-4 w-4 text-zinc-400" />
+              Updates
+            </label>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-zinc-500">Current version: v{appVersion}</span>
+            <button
+              onClick={() => setIsUpdateModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-white/10 rounded-lg text-xs font-medium text-zinc-300 transition-colors cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Check for Updates
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="py-3 border-t border-white/5 flex items-center justify-between gap-3">
@@ -674,6 +703,13 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           Save
         </button>
       </div>
+
+      {isUpdateModalOpen && (
+        <UpdateModal
+          isOpen={isUpdateModalOpen}
+          onClose={() => setIsUpdateModalOpen(false)}
+        />
+      )}
 
       {isQuitDialogOpen && (
         <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">

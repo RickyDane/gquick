@@ -4197,6 +4197,19 @@ fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -
     apps
 }
 
+/// Write a message to a persistent log file for debugging.
+/// The file is written to the user's temp directory as `gquick_capture.log`.
+fn log_capture(msg: &str) {
+    use std::io::Write;
+    let log_path = std::env::temp_dir().join("gquick_capture.log");
+    let line = format!("[gquick] {}\n", msg);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 #[tauri::command]
 fn capture_region(
     window: tauri::Window,
@@ -4206,16 +4219,31 @@ fn capture_region(
     height: u32,
     mode: String,
 ) -> Result<String, String> {
+    log_capture(&format!(
+        "capture_region called: x={} y={} w={} h={} mode={}",
+        x, y, width, height, mode
+    ));
+
     // 1. Get monitor info while window is still visible
     let tauri_monitor = match window.current_monitor() {
         Ok(Some(m)) => m,
         _ => {
+            log_capture("ERROR: No monitor found from window.current_monitor()");
             let _ = window.close();
             return Err("No monitor found".to_string());
         }
     };
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let app = window.app_handle();
+
+    log_capture(&format!(
+        "tauri_monitor: pos=({},{}) size={}x{} scale={}",
+        tauri_monitor.position().x,
+        tauri_monitor.position().y,
+        tauri_monitor.size().width,
+        tauri_monitor.size().height,
+        scale_factor
+    ));
 
     // 2. Hide the window immediately to clear the screen
     // Block briefly to allow the compositor to fully hide our transparent
@@ -4236,33 +4264,60 @@ fn capture_region(
         let phys_width = (width as f64 * scale_factor).round() as u32;
         let phys_height = (height as f64 * scale_factor).round() as u32;
 
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[capture_region] physical coords: x={} y={} w={} h={}",
+        log_capture(&format!(
+            "physical coords (pre-clamp): x={} y={} w={} h={}",
             phys_x, phys_y, phys_width, phys_height
-        );
+        ));
 
         // Clamp to monitor bounds
-        let monitor_width = xcap_monitor.width().map_err(|e| e.to_string())?;
-        let monitor_height = xcap_monitor.height().map_err(|e| e.to_string())?;
+        let monitor_width = xcap_monitor.width().map_err(|e| {
+            let msg = format!("xcap_monitor.width() failed: {}", e);
+            log_capture(&msg);
+            msg
+        })?;
+        let monitor_height = xcap_monitor.height().map_err(|e| {
+            let msg = format!("xcap_monitor.height() failed: {}", e);
+            log_capture(&msg);
+            msg
+        })?;
+
+        log_capture(&format!(
+            "xcap monitor dimensions: {}x{}",
+            monitor_width, monitor_height
+        ));
+
         let phys_x = phys_x.max(0).min(monitor_width as i32) as u32;
         let phys_y = phys_y.max(0).min(monitor_height as i32) as u32;
         let phys_width = phys_width.min(monitor_width - phys_x);
         let phys_height = phys_height.min(monitor_height - phys_y);
 
         if phys_width < 2 || phys_height < 2 {
+            let msg = format!(
+                "Selected region is too small after clamp: w={} h={}",
+                phys_width, phys_height
+            );
+            log_capture(&msg);
             return Err("Selected region is too small".to_string());
         }
 
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[capture_region] clamped coords: x={} y={} w={} h={}",
+        log_capture(&format!(
+            "capture_region calling capture_region: x={} y={} w={} h={}",
             phys_x, phys_y, phys_width, phys_height
-        );
+        ));
 
         let cropped = xcap_monitor
             .capture_region(phys_x, phys_y, phys_width, phys_height)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let msg = format!("xcap capture_region failed: {}", e);
+                log_capture(&msg);
+                msg
+            })?;
+
+        log_capture(&format!(
+            "capture_region succeeded: image {}x{}",
+            cropped.width(),
+            cropped.height()
+        ));
 
         let desktop_dir = dirs::desktop_dir().unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -4272,7 +4327,11 @@ fn capture_region(
             .to_string_lossy()
             .to_string();
 
-        cropped.save(&path).map_err(|e| e.to_string())?;
+        if let Err(e) = cropped.save(&path) {
+            log_capture(&format!("Failed to save image: {}", e));
+            return Err(format!("Failed to save image: {}", e));
+        }
+        log_capture(&format!("Image saved to: {}", path));
 
         // Handle Modes
         if mode == "screenshot" {
@@ -4281,7 +4340,11 @@ fn capture_region(
             let height = cropped.height();
             let rgba_bytes = cropped.into_raw();
             let tauri_image = tauri::image::Image::new_owned(rgba_bytes, width, height);
-            let _ = app.clipboard().write_image(&tauri_image);
+            if let Err(e) = app.clipboard().write_image(&tauri_image) {
+                log_capture(&format!("Clipboard write_image failed: {}", e));
+            } else {
+                log_capture("Screenshot copied to clipboard");
+            }
         } else if mode == "ocr" {
             #[cfg(target_os = "macos")]
             {
@@ -4298,7 +4361,7 @@ fn capture_region(
                 };
 
                 if let Err(e) = app.emit("ocr-complete", preview) {
-                    eprintln!("Failed to emit ocr-complete: {}", e);
+                    log_capture(&format!("Failed to emit ocr-complete: {}", e));
                 }
             }
 
@@ -4307,16 +4370,20 @@ fn capture_region(
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         let image_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        log_capture(&format!(
+                            "OCR: read {} bytes, emitting ocr-image-ready",
+                            bytes.len()
+                        ));
                         if let Err(e) = app.emit("ocr-image-ready", image_base64) {
-                            eprintln!("Failed to emit ocr-image-ready: {}", e);
+                            log_capture(&format!("Failed to emit ocr-image-ready: {}", e));
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to read captured image for OCR: {}", e);
+                        log_capture(&format!("Failed to read captured image for OCR: {}", e));
                         if let Err(emit_err) =
                             app.emit("ocr-error", format!("Failed to read image: {}", e))
                         {
-                            eprintln!("Failed to emit ocr-error: {}", emit_err);
+                            log_capture(&format!("Failed to emit ocr-error: {}", emit_err));
                         }
                     }
                 }
@@ -4325,6 +4392,10 @@ fn capture_region(
 
         Ok(path)
     })();
+
+    if let Err(ref e) = capture_result {
+        log_capture(&format!("capture_region FAILED: {}", e));
+    }
 
     // 4. Always close the window when done
     let _ = window.close();
@@ -4340,11 +4411,11 @@ fn xcap_monitor_for_tauri_monitor(
     let center_x = tauri_position.x + (tauri_size.width as i32 / 2);
     let center_y = tauri_position.y + (tauri_size.height as i32 / 2);
 
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[capture_region] tauri monitor: pos=({},{}) size={}x{}",
-        tauri_position.x, tauri_position.y, tauri_size.width, tauri_size.height
-    );
+    log_capture(&format!(
+        "xcap_monitor_for_tauri_monitor: tauri pos=({},{}) size={}x{} center=({},{})",
+        tauri_position.x, tauri_position.y, tauri_size.width, tauri_size.height,
+        center_x, center_y
+    ));
 
     // Strategy 1: Try from_point with center coordinates
     if let Ok(monitor) = xcap::Monitor::from_point(center_x, center_y) {
@@ -4352,18 +4423,23 @@ fn xcap_monitor_for_tauri_monitor(
         let Ok(my) = monitor.y() else { return Ok(monitor); };
         let Ok(mw) = monitor.width() else { return Ok(monitor); };
         let Ok(mh) = monitor.height() else { return Ok(monitor); };
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[capture_region] strategy 1 matched: name={:?} pos=({},{}) size={}x{}",
-            monitor.name(),
-            mx, my, mw, mh
-        );
+        log_capture(&format!(
+            "xcap strategy 1 matched: name={:?} pos=({},{}) size={}x{}",
+            monitor.name(), mx, my, mw, mh
+        ));
         return Ok(monitor);
     }
+    log_capture("xcap strategy 1 (from_point) failed");
 
     // Strategy 2: Exact match by position and size
     let all_monitors =
-        xcap::Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
+        xcap::Monitor::all().map_err(|e| {
+            log_capture(&format!("xcap Monitor::all() failed: {}", e));
+            format!("Failed to enumerate monitors: {}", e)
+        })?;
+
+    log_capture(&format!("xcap enumerated {} monitors", all_monitors.len()));
+
     for monitor in &all_monitors {
         let Ok(mx) = monitor.x() else { continue; };
         let Ok(my) = monitor.y() else { continue; };
@@ -4375,15 +4451,14 @@ fn xcap_monitor_for_tauri_monitor(
             && mw == tauri_size.width
             && mh == tauri_size.height
         {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[capture_region] strategy 2 matched: name={:?} pos=({},{}) size={}x{}",
-                monitor.name(),
-                mx, my, mw, mh
-            );
+            log_capture(&format!(
+                "xcap strategy 2 matched: name={:?} pos=({},{}) size={}x{}",
+                monitor.name(), mx, my, mw, mh
+            ));
             return Ok(monitor.clone());
         }
     }
+    log_capture("xcap strategy 2 (exact match) failed");
 
     // Strategy 3: Find monitor whose bounds contain the center point
     for monitor in &all_monitors {
@@ -4395,15 +4470,14 @@ fn xcap_monitor_for_tauri_monitor(
         let mright = mx + mw as i32;
         let mbottom = my + mh as i32;
         if center_x >= mx && center_x < mright && center_y >= my && center_y < mbottom {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[capture_region] strategy 3 matched: name={:?} pos=({},{}) size={}x{}",
-                monitor.name(),
-                mx, my, mw, mh
-            );
+            log_capture(&format!(
+                "xcap strategy 3 matched: name={:?} pos=({},{}) size={}x{}",
+                monitor.name(), mx, my, mw, mh
+            ));
             return Ok(monitor.clone());
         }
     }
+    log_capture("xcap strategy 3 (bounds containment) failed");
 
     // Strategy 4: Ultimate fallback to primary monitor
     for monitor in &all_monitors {
@@ -4412,14 +4486,13 @@ fn xcap_monitor_for_tauri_monitor(
         let Ok(my) = monitor.y() else { continue; };
         let Ok(mw) = monitor.width() else { continue; };
         let Ok(mh) = monitor.height() else { continue; };
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[capture_region] strategy 4 fallback to primary: name={:?} pos=({},{}) size={}x{}",
-            monitor.name(),
-            mx, my, mw, mh
-        );
+        log_capture(&format!(
+            "xcap strategy 4 fallback to primary: name={:?} pos=({},{}) size={}x{}",
+            monitor.name(), mx, my, mw, mh
+        ));
         return Ok(monitor.clone());
     }
+    log_capture("xcap strategy 4 (primary fallback) failed");
 
     Err("Could not find xcap monitor for selector monitor".to_string())
 }
@@ -4533,14 +4606,21 @@ fn selector_geometry_for_mouse<R: Runtime>(
 }
 
 fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
+    log_capture(&format!("show_selector_window called, mode={}", mode));
     if let Some((logical_pos, logical_size)) = selector_geometry_for_mouse(app) {
+        log_capture(&format!(
+            "selector geometry: pos=({}, {}) size={}x{}",
+            logical_pos.x, logical_pos.y, logical_size.width, logical_size.height
+        ));
         if let Some(selector) = app.get_webview_window("selector") {
+            log_capture("reusing existing selector window");
             let _ = selector.emit("set-mode", mode);
             let _ = selector.set_size(tauri::Size::Logical(logical_size));
             let _ = selector.set_position(tauri::Position::Logical(logical_pos));
             let _ = selector.show();
             let _ = selector.set_focus();
         } else {
+            log_capture("creating new selector window");
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "selector",
@@ -4555,11 +4635,19 @@ fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
             .shadow(false)
             .visible(false);
 
-            if let Ok(window) = builder.build() {
-                let _ = window.show();
-                let _ = window.set_focus();
+            match builder.build() {
+                Ok(window) => {
+                    log_capture("selector window built successfully");
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                Err(e) => {
+                    log_capture(&format!("FAILED to build selector window: {}", e));
+                }
             }
         }
+    } else {
+        log_capture("FAILED: selector_geometry_for_mouse returned None");
     }
 }
 
@@ -4913,6 +5001,7 @@ pub fn run() {
                             if shortcut.mods == screenshot_shortcut.mods
                                 && shortcut.key == screenshot_shortcut.key
                             {
+                                log_capture("global shortcut triggered: screenshot");
                                 let mode = "screenshot";
                                 show_selector_window(app, mode);
                             }
@@ -4924,6 +5013,7 @@ pub fn run() {
                             if shortcut.mods == ocr_shortcut.mods
                                 && shortcut.key == ocr_shortcut.key
                             {
+                                log_capture("global shortcut triggered: ocr");
                                 let mode = "ocr";
                                 show_selector_window(app, mode);
                             }

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useCallback } from "react";
-import { createPortal } from "react-dom";
 import { AlertTriangle } from "lucide-react";
 
 interface ConfirmModalProps {
@@ -23,19 +22,24 @@ export function ConfirmModal({
   // Focus delete button on open
   useEffect(() => {
     if (isOpen) {
-      // Small delay to ensure portal is rendered
+      // Wait until the modal panel is rendered before moving focus.
       requestAnimationFrame(() => deleteBtnRef.current?.focus());
     }
   }, [isOpen]);
 
-  // Close on Escape
+  // Close on Escape before app-level shortcuts can handle the key.
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key !== "Escape") return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      onCancel();
     };
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
   }, [isOpen, onCancel]);
 
   // Focus trap
@@ -68,17 +72,12 @@ export function ConfirmModal({
 
   if (!isOpen) return null;
 
-  return createPortal(
+  return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-modal-title"
-      aria-describedby="confirm-modal-desc"
+      className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
     >
-      {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0"
         onClick={onCancel}
       />
 
@@ -86,11 +85,15 @@ export function ConfirmModal({
       <div
         ref={modalRef}
         onKeyDown={handleKeyDown}
-        className="relative z-10 w-full max-w-sm mx-4 bg-zinc-900 border border-white/10 rounded-2xl p-6 shadow-2xl"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        aria-describedby="confirm-modal-desc"
+        className="relative z-10 w-full max-w-sm rounded-2xl bg-zinc-950/95 border border-white/10 shadow-2xl shadow-black/40 p-4"
       >
-        <div className="flex items-start gap-4">
-          <div className="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-red-500/10">
-            <AlertTriangle className="h-5 w-5 text-red-400" />
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
+            <AlertTriangle className="h-4 w-4" />
           </div>
           <div className="flex-1 min-w-0">
             <h2
@@ -108,23 +111,22 @@ export function ConfirmModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 mt-6">
+        <div className="flex items-center justify-end gap-2 mt-4">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium border border-white/10 transition-colors cursor-pointer"
+            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 cursor-pointer border border-white/10 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
           >
             Cancel
           </button>
           <button
             ref={deleteBtnRef}
             onClick={onConfirm}
-            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer"
+            className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
           >
             Delete
           </button>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }

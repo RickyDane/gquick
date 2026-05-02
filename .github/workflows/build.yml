@@ -816,10 +816,32 @@ jobs:
           const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
           const baseUrl = `https://github.com/${{ github.repository }}/releases/download/${tag}`;
 
-          const expectedBundles = [
-            { platform: 'darwin-aarch64', bundlePattern: /\.app\.tar\.gz$/, sigPattern: /\.app\.tar\.gz\.sig$/ },
-            { platform: 'linux-x86_64', bundlePattern: /\.AppImage\.tar\.gz$/, sigPattern: /\.AppImage\.tar\.gz\.sig$/ },
-            { platform: 'windows-x86_64', bundlePattern: /\.nsis\.zip$/, sigPattern: /\.nsis\.zip\.sig$/ },
+          const platformArtifacts = [
+            {
+              artifactName: 'gquick-macos-arm',
+              platform: 'darwin-aarch64',
+              candidates: [
+                { bundlePattern: /\.app\.tar\.gz$/, sigPattern: /\.app\.tar\.gz\.sig$/ },
+              ],
+            },
+            {
+              artifactName: 'gquick-linux',
+              platform: 'linux-x86_64',
+              candidates: [
+                // Tauri v2 signs the AppImage itself on Linux. Older builds may
+                // have produced a compressed AppImage updater bundle.
+                { bundlePattern: /\.AppImage$/, sigPattern: /\.AppImage\.sig$/ },
+                { bundlePattern: /\.AppImage\.tar\.gz$/, sigPattern: /\.AppImage\.tar\.gz\.sig$/ },
+              ],
+            },
+            {
+              artifactName: 'gquick-windows',
+              platform: 'windows-x86_64',
+              candidates: [
+                { bundlePattern: /\.nsis\.zip$/, sigPattern: /\.nsis\.zip\.sig$/ },
+                { bundlePattern: /\.exe$/, sigPattern: /\.exe\.sig$/ },
+              ],
+            },
           ];
 
           function walk(dir) {
@@ -831,38 +853,92 @@ jobs:
           }
 
           const files = walk('artifacts');
-          const byBasename = new Map(files.map((file) => [path.basename(file), file]));
           const platforms = {};
 
-          for (const { platform, bundlePattern, sigPattern } of expectedBundles) {
-            const bundles = files.filter((file) => bundlePattern.test(path.basename(file)));
-            if (bundles.length !== 1) {
-              console.error(`Expected exactly one ${platform} updater bundle matching ${bundlePattern}, found ${bundles.length}.`);
-              for (const bundle of bundles) console.error(`  ${bundle}`);
+          function printDownloadedArtifacts() {
+            console.error('Downloaded artifacts:');
+            for (const file of files.slice().sort()) console.error(`  ${file}`);
+          }
+
+          function filesForArtifact(artifactName, platform) {
+            const artifactDir = path.join('artifacts', artifactName);
+            if (!fs.existsSync(artifactDir) || !fs.statSync(artifactDir).isDirectory()) {
+              console.error(`Missing required ${platform} artifact folder: ${artifactDir}`);
+              printDownloadedArtifacts();
               process.exit(1);
             }
 
-            const signatures = files.filter((file) => sigPattern.test(path.basename(file)));
-            if (signatures.length !== 1) {
-              console.error(`Expected exactly one ${platform} updater signature matching ${sigPattern}, found ${signatures.length}.`);
-              for (const signature of signatures) console.error(`  ${signature}`);
+            const prefix = `${artifactDir}${path.sep}`;
+            const artifactFiles = files.filter((file) => file.startsWith(prefix));
+            if (artifactFiles.length === 0) {
+              console.error(`Missing required ${platform} artifact files in ${artifactDir}.`);
+              printDownloadedArtifacts();
               process.exit(1);
             }
 
-            const bundle = bundles[0];
+            return artifactFiles;
+          }
+
+          function selectUpdaterBundle(platform, platformFiles, candidates) {
+            const diagnostics = [];
+            for (const { bundlePattern, sigPattern } of candidates) {
+              const bundles = platformFiles.filter((file) => bundlePattern.test(path.basename(file)));
+              const signatures = platformFiles.filter((file) => sigPattern.test(path.basename(file)));
+              diagnostics.push({ bundlePattern, sigPattern, bundles, signatures });
+
+              if (bundles.length === 1) {
+                const bundle = bundles[0];
+                const sigName = `${path.basename(bundle)}.sig`;
+                const matchingSignatures = platformFiles.filter((file) => path.basename(file) === sigName);
+                if (matchingSignatures.length === 1) return { bundle, signature: matchingSignatures[0] };
+
+                console.error(`Expected exactly one updater signature pair for ${platform} in same artifact folder: ${sigName}; found ${matchingSignatures.length}.`);
+                console.error(`Matched bundle: ${bundle}`);
+                console.error(`Signatures matching ${sigPattern}:`);
+                for (const signature of signatures) console.error(`  ${signature}`);
+                if (matchingSignatures.length > 1) {
+                  console.error(`Signatures named ${sigName}:`);
+                  for (const signature of matchingSignatures) console.error(`  ${signature}`);
+                }
+                printDownloadedArtifacts();
+                process.exit(1);
+              }
+
+              if (bundles.length > 1) {
+                console.error(`Expected at most one ${platform} updater bundle matching ${bundlePattern}, found ${bundles.length}.`);
+                for (const bundle of bundles) console.error(`  ${bundle}`);
+                printDownloadedArtifacts();
+                process.exit(1);
+              }
+            }
+
+            console.error(`Expected exactly one ${platform} updater bundle for one of the supported Tauri v2 patterns, found 0.`);
+            for (const { bundlePattern, sigPattern, bundles, signatures } of diagnostics) {
+              console.error(`  bundle ${bundlePattern}: ${bundles.length}`);
+              for (const bundle of bundles) console.error(`    ${bundle}`);
+              console.error(`  signature ${sigPattern}: ${signatures.length}`);
+              for (const signature of signatures) console.error(`    ${signature}`);
+            }
+            printDownloadedArtifacts();
+            process.exit(1);
+          }
+
+          for (const { artifactName, platform, candidates } of platformArtifacts) {
+            const platformFiles = filesForArtifact(artifactName, platform);
+            const { bundle, signature } = selectUpdaterBundle(platform, platformFiles, candidates);
             const bundleName = path.basename(bundle);
-            const sigName = `${bundleName}.sig`;
-            const sigPath = byBasename.get(sigName);
-            if (!sigPath) {
-              console.error(`Missing updater signature pair for ${platform}: expected ${sigName}.`);
-              process.exit(1);
-            }
 
             platforms[platform] = {
-              signature: fs.readFileSync(sigPath, 'utf8').trim(),
+              signature: fs.readFileSync(signature, 'utf8').trim(),
               url: `${baseUrl}/${encodeURIComponent(bundleName)}`,
             };
             console.log(`Found ${platform} updater bundle: ${bundleName}`);
+          }
+
+          if (Object.keys(platforms).length === 0) {
+            console.error('No updater bundles found for latest.json.');
+            printDownloadedArtifacts();
+            process.exit(1);
           }
 
           const latest = {

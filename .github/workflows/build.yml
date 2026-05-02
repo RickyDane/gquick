@@ -313,7 +313,15 @@ jobs:
         id: validate_cert
 
       - name: Build Tauri app
+        if: matrix.os_name != 'macos-arm'
         run: npm run tauri -- build --target ${{ matrix.target }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Build Tauri app and DMG
+        if: matrix.os_name == 'macos-arm'
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles app,dmg
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -430,15 +438,6 @@ jobs:
             exit 1
           fi
 
-          if [ "$missing_secrets_count" -gt 0 ]; then
-            if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
-              echo "::error::Apple signing/notarization secrets are missing for release build: ${missing_secrets[*]}. Refusing to publish unnotarized macOS DMG."
-              exit 1
-            fi
-            echo "::warning::Apple signing/notarization secrets are missing (${missing_secrets[*]}). Skipping final DMG notarization for non-release build."
-            exit 0
-          fi
-
           if [ "$app_bundles_count" -eq 0 ]; then
             echo "::error::No macOS .app bundle found to verify in cleaned bundle roots."
             print_bundle_root_listing
@@ -447,9 +446,9 @@ jobs:
 
           if [ "$dmg_files_count" -eq 0 ]; then
             if [ "$all_dmg_files_count" -eq 0 ]; then
-              echo "::error::No macOS .dmg files found to notarize in cleaned bundle roots."
+              echo "::error::No current-version macOS .dmg files found in cleaned bundle roots."
             else
-              echo "::error::Found macOS .dmg file(s), but none strictly match current version ${version}. Refusing to notarize stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
+              echo "::error::Found macOS .dmg file(s), but none strictly match current version ${version}. Refusing to continue because staging could publish stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
               echo "DMG filenames found:"
               for dmg in "${all_dmg_files[@]+"${all_dmg_files[@]}"}"; do
                 echo "  $(basename "$dmg")"
@@ -457,6 +456,15 @@ jobs:
             fi
             print_bundle_root_listing
             exit 1
+          fi
+
+          if [ "$missing_secrets_count" -gt 0 ]; then
+            if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Apple signing/notarization secrets are missing for release build: ${missing_secrets[*]}. Refusing to publish unnotarized macOS DMG."
+              exit 1
+            fi
+            echo "::warning::Apple signing/notarization secrets are missing (${missing_secrets[*]}). Skipping final DMG notarization for non-release build."
+            exit 0
           fi
 
           for app in "${app_bundles[@]+"${app_bundles[@]}"}"; do

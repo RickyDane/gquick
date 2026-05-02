@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    webview::PageLoadEvent,
     Emitter, Manager, Runtime,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -4614,17 +4615,29 @@ fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
         ));
         if let Some(selector) = app.get_webview_window("selector") {
             log_capture("reusing existing selector window");
-            let _ = selector.emit("set-mode", mode);
-            let _ = selector.set_size(tauri::Size::Logical(logical_size));
-            let _ = selector.set_position(tauri::Position::Logical(logical_pos));
-            let _ = selector.show();
-            let _ = selector.set_focus();
+            if let Err(e) = selector.show() {
+                log_capture(&format!("FAILED to show selector window: {}", e));
+            }
+            if let Err(e) = selector.set_size(tauri::Size::Logical(logical_size)) {
+                log_capture(&format!("FAILED to set selector size: {}", e));
+            }
+            if let Err(e) = selector.set_position(tauri::Position::Logical(logical_pos)) {
+                log_capture(&format!("FAILED to set selector position: {}", e));
+            }
+            if let Err(e) = selector.set_focus() {
+                log_capture(&format!("FAILED to focus selector window: {}", e));
+            }
+            if let Err(e) = selector.emit("set-mode", mode) {
+                log_capture(&format!("FAILED to emit selector mode: {}", e));
+            }
         } else {
             log_capture("creating new selector window");
+            let selector_url = format!("selector.html?mode={}", mode);
+            log_capture(&format!("selector URL: {}", selector_url));
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "selector",
-                tauri::WebviewUrl::App(format!("selector.html?mode={}", mode).into()),
+                tauri::WebviewUrl::App(selector_url.into()),
             )
             .title("Selector")
             .inner_size(logical_size.width, logical_size.height)
@@ -4633,13 +4646,22 @@ fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
             .transparent(true)
             .always_on_top(true)
             .shadow(false)
-            .visible(false);
+            .visible(true)
+            .on_page_load(|_window, payload| match payload.event() {
+                PageLoadEvent::Started => {
+                    log_capture(&format!("selector page load Started: {}", payload.url()));
+                }
+                PageLoadEvent::Finished => {
+                    log_capture(&format!("selector page load Finished: {}", payload.url()));
+                }
+            });
 
             match builder.build() {
                 Ok(window) => {
                     log_capture("selector window built successfully");
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    if let Err(e) = window.set_focus() {
+                        log_capture(&format!("FAILED to focus selector window: {}", e));
+                    }
                 }
                 Err(e) => {
                     log_capture(&format!("FAILED to build selector window: {}", e));

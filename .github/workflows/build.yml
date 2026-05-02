@@ -344,6 +344,82 @@ jobs:
             fi
           done
 
+          version="$(node -p "require('./package.json').version")"
+          bundle_roots=(
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/release/bundle"
+          )
+          app_bundles=()
+          all_dmg_files=()
+          dmg_files=()
+          mismatched_dmg_files=()
+
+          escaped_version="$(VERSION="$version" node -e 'process.stdout.write(process.env.VERSION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))')"
+          # Tauri DMG names use the app name, exact version, optional arch, then .dmg
+          # (for example: GQuick_0.1.6_aarch64.dmg). Do not treat '-' after a
+          # stable version as a delimiter, because that would match prereleases.
+          version_regex="(^|[_-])${escaped_version}(_(aarch64|x64|universal))?\.dmg$"
+
+          print_bundle_root_listing() {
+            echo "Full cleaned Tauri bundle root listing:"
+            for bundle_root in "${bundle_roots[@]}"; do
+              if [ -d "$bundle_root" ]; then
+                echo "Bundle root exists: $bundle_root"
+                find "$bundle_root" -print | sort
+              else
+                echo "Bundle root missing: $bundle_root"
+              fi
+            done
+          }
+
+          echo "Inspecting cleaned Tauri bundle roots for macOS artifacts:"
+          for bundle_root in "${bundle_roots[@]}"; do
+            if [ -d "$bundle_root" ]; then
+              echo "Bundle root exists: $bundle_root"
+
+              while IFS= read -r app_bundle; do
+                app_bundles+=("$app_bundle")
+              done < <(find "$bundle_root" -name '*.app' -type d -prune -print | sort)
+
+              while IFS= read -r dmg_file; do
+                all_dmg_files+=("$dmg_file")
+                dmg_basename="$(basename "$dmg_file")"
+                if [[ "$dmg_basename" =~ $version_regex ]]; then
+                  dmg_files+=("$dmg_file")
+                else
+                  mismatched_dmg_files+=("$dmg_file")
+                fi
+              done < <(find "$bundle_root" -type f -name '*.dmg' -print | sort)
+            else
+              echo "Bundle root missing: $bundle_root"
+            fi
+          done
+
+          echo "Discovered macOS app bundles (${#app_bundles[@]}):"
+          for app in "${app_bundles[@]}"; do
+            echo "  $app"
+          done
+
+          echo "Discovered macOS DMG files (${#all_dmg_files[@]}):"
+          for dmg in "${all_dmg_files[@]}"; do
+            echo "  $dmg"
+          done
+
+          echo "Current-version DMG matches for version ${version} (${#dmg_files[@]}):"
+          for dmg in "${dmg_files[@]}"; do
+            echo "  $dmg"
+          done
+
+          if [ ${#mismatched_dmg_files[@]} -gt 0 ]; then
+            echo "::error::Found macOS .dmg file(s) that do not strictly match current version ${version}. Refusing to continue because staging could publish stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
+            echo "Mismatched DMG files:"
+            for dmg in "${mismatched_dmg_files[@]}"; do
+              echo "  $dmg"
+            done
+            print_bundle_root_listing
+            exit 1
+          fi
+
           if [ ${#missing_secrets[@]} -gt 0 ]; then
             if [ "$SHOULD_PUBLISH_RELEASE" = "true" ] && [ "${{ github.event_name }}" = "push" ]; then
               echo "::error::Apple signing/notarization secrets are missing for release build: ${missing_secrets[*]}. Refusing to publish unnotarized macOS DMG."
@@ -353,26 +429,23 @@ jobs:
             exit 0
           fi
 
-          shopt -s nullglob
-          version="$(node -p "require('./package.json').version")"
-          bundle_roots=(
-            "src-tauri/target/${{ matrix.target }}/release/bundle"
-            "src-tauri/target/release/bundle"
-          )
-          app_bundles=()
-          dmg_files=()
-          for bundle_root in "${bundle_roots[@]}"; do
-            app_bundles+=("$bundle_root"/macos/*.app)
-            dmg_files+=("$bundle_root"/dmg/*"$version"*.dmg)
-          done
-
           if [ ${#app_bundles[@]} -eq 0 ]; then
-            echo "::error::No macOS .app bundle found to verify."
+            echo "::error::No macOS .app bundle found to verify in cleaned bundle roots."
+            print_bundle_root_listing
             exit 1
           fi
 
           if [ ${#dmg_files[@]} -eq 0 ]; then
-            echo "::error::No macOS .dmg files found to notarize."
+            if [ ${#all_dmg_files[@]} -eq 0 ]; then
+              echo "::error::No macOS .dmg files found to notarize in cleaned bundle roots."
+            else
+              echo "::error::Found macOS .dmg file(s), but none strictly match current version ${version}. Refusing to notarize stale or mismatched artifacts. Expected Tauri DMG filename version pattern: ${version_regex}"
+              echo "DMG filenames found:"
+              for dmg in "${all_dmg_files[@]}"; do
+                echo "  $(basename "$dmg")"
+              done
+            fi
+            print_bundle_root_listing
             exit 1
           fi
 

@@ -129,10 +129,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Validate app versions match
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+
+          if [ "$package_version" != "$tauri_version" ]; then
+            echo "::error::Version mismatch: package.json has $package_version but src-tauri/tauri.conf.json has $tauri_version. Keep them in sync so release artifact filtering finds the current Tauri bundles."
+            exit 1
+          fi
+
+          echo "Validated release version: $package_version"
+
       - name: Clean cached bundle artifacts
         shell: bash
         run: |
           rm -rf "src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -rf "src-tauri/target/release/bundle"
           rm -rf "release-artifacts/${{ matrix.os_name }}"
 
       - name: Debug signing secret access
@@ -229,8 +243,17 @@ jobs:
           fi
 
           shopt -s nullglob
-          app_bundles=(src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
-          dmg_files=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          version="$(node -p "require('./package.json').version")"
+          bundle_roots=(
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/release/bundle"
+          )
+          app_bundles=()
+          dmg_files=()
+          for bundle_root in "${bundle_roots[@]}"; do
+            app_bundles+=("$bundle_root"/macos/*.app)
+            dmg_files+=("$bundle_root"/dmg/*"$version"*.dmg)
+          done
 
           if [ ${#app_bundles[@]} -eq 0 ]; then
             echo "::error::No macOS .app bundle found to verify."
@@ -326,7 +349,10 @@ jobs:
           const fs = require('fs');
           const path = require('path');
 
-          const sourceRoot = path.join('src-tauri', 'target', '${{ matrix.target }}', 'release', 'bundle');
+          const sourceRoots = [
+            path.join('src-tauri', 'target', '${{ matrix.target }}', 'release', 'bundle'),
+            path.join('src-tauri', 'target', 'release', 'bundle'),
+          ];
           const outputRoot = path.join('release-artifacts', '${{ matrix.os_name }}');
           const allowedPatterns = [
             /\.dmg$/,
@@ -358,13 +384,13 @@ jobs:
           fs.rmSync(outputRoot, { recursive: true, force: true });
           fs.mkdirSync(outputRoot, { recursive: true });
 
-          const artifacts = walk(sourceRoot).filter((file) => {
+          const artifacts = sourceRoots.flatMap(walk).filter((file) => {
             const normalized = file.split(path.sep).join('/');
             return allowedPatterns.some((pattern) => pattern.test(normalized));
           });
 
           if (artifacts.length === 0) {
-            console.error(`No releasable artifacts found in ${sourceRoot}`);
+            console.error(`No releasable artifacts found in ${sourceRoots.join(', ')}`);
             process.exit(1);
           }
 

@@ -4624,7 +4624,7 @@ fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "selector",
-                tauri::WebviewUrl::App(format!("index.html?mode={}", mode).into()),
+                tauri::WebviewUrl::App(format!("selector.html?mode={}", mode).into()),
             )
             .title("Selector")
             .inner_size(logical_size.width, logical_size.height)

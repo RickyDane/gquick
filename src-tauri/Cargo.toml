@@ -3,7 +3,7 @@ name = "gquick"
 version = "0.1.4"
 description = "A simple, fast and feature rich launcher"
 authors = ["Ricky Dane Perlick"]
-edition = "2024"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

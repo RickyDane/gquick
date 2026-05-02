@@ -47,7 +47,9 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
           echo "VERSION=${TAG}" >> "$GITHUB_OUTPUT"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+
+          # Check if tag exists locally or on remote
+          if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
             echo "Tag ${TAG} already exists, skipping creation."
           else
             git config user.name "github-actions[bot]"

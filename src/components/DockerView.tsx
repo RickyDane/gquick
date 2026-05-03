@@ -521,7 +521,7 @@ export function DockerView({ initialImage, searchQuery, onSearchQueryChange }: D
             aria-modal="true"
             aria-labelledby="docker-prune-dialog-title"
             aria-describedby="docker-prune-dialog-description"
-            className="w-full max-w-sm rounded-2xl border border-red-500/20 bg-zinc-950/95 p-4 shadow-2xl shadow-black/40"
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950/95 p-4 shadow-2xl shadow-black/40"
           >
             <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
               <span className="flex h-7 w-7 items-center justify-center rounded-full border border-red-500/20 bg-red-500/10 text-red-400">

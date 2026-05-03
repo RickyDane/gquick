@@ -6,9 +6,9 @@
 
 > A cross-platform productivity launcher with AI-powered features. Built for speed, extensibility, and elegance.
 
-GQuick is a Spotlight-like desktop launcher that helps you open apps, search files, manage Docker containers, calculate expressions, translate text, capture screenshots with OCR, and chat with AI — all from a single keyboard-driven interface.
+GQuick is a Spotlight-like desktop launcher that helps you open apps, search files, manage Docker containers, calculate expressions, translate text, capture screenshots with OCR, and chat with AI - all from a single keyboard-driven interface.
 
-**Supported Platforms:** macOS · Windows · Linux
+**Supported Platforms:** macOS · Windows · (Linux 'WIP')
 
 ---
 
@@ -33,53 +33,67 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 ## Features
 
 ### Core Launchers
-- **App Launcher** — Launch applications instantly
+- **App Launcher** - Launch applications instantly
   - macOS: Scans `/Applications` and `/System/Applications`
   - Windows: Scans Start Menu `.lnk` files
   - Linux: Parses `.desktop` files
-- **File Search** — Find files and folders by name across your home directory
-- **Smart Search** — AI-powered file search that reads file contents to find the most relevant matches
+- **File Search** - Find files and folders by name across your home directory
+- **Smart Search** - AI-powered file search that reads file contents to find the most relevant matches
 
 ### Tools & Utilities
-- **Calculator** — Evaluate mathematical expressions directly in the search bar
-- **Docker Manager** — List, start, stop, and remove Docker containers and images, search Docker Hub, manage Compose projects
-- **Web Search** — Quick Google searches opened in your default browser
-- **Quick Translate** — Instant text translation powered by AI. Type `t: <text>` or `tr: <text>` for instant translation without opening the full UI
-- **Weather** — Current conditions and 7-day forecast powered by Open-Meteo. Type `/wt <city>` or `weather:` to search locations
-- **Speedtest** — Measure latency, download, and upload speed via Cloudflare endpoints. Type `speedtest` or `/st`
-- **Network Info** — View local IP, public IP, Wi-Fi SSID, and latency. Type `net:`, `network:`, or `wifi`
-- **Notes** — Quick note capture with `note: <content>`, search notes with `search notes: <query>`, and browse all notes in a dedicated view
-- **Terminal Commands** — Run shell commands directly from the launcher. Type `> <command>` to execute inline or in an external terminal
-- **URL Recognition** — Type any URL (e.g., `example.com`, `localhost:3000`) to open it directly in your default browser
+- **Calculator** - Evaluate mathematical expressions directly in the search bar
+- **Docker Manager** - List, start, stop, and remove Docker containers and images, search Docker Hub, manage Compose projects
+- **Web Search** - Quick Google searches opened in your default browser
+- **Quick Translate** - Instant text translation powered by AI. Type `t: <text>` or `tr: <text>` for instant translation without opening the full UI
+- **Weather** - Current conditions and 7-day forecast powered by Open-Meteo. Type `/wt <city>` or `weather:` to search locations
+- **Speedtest** - Measure latency, download, and upload speed via Cloudflare endpoints. Type `speedtest` or `/st`
+- **Network Info** - View local IP, public IP, Wi-Fi SSID, and latency. Type `net:`, `network:`, or `wifi`
+- **Notes** - Quick note capture with `note: <content>`, search notes with `search notes: <query>`, and browse all notes in a dedicated view
+- **Terminal Commands** - Run shell commands directly from the launcher. Type `> <command>` to execute inline or in an external terminal
+- **URL Recognition** - Type any URL (e.g., `example.com`, `localhost:3000`) to open it directly in your default browser
 
 ### Screen Capture & OCR
-- **Screenshot Capture** — Select any screen region with `Alt+S`
-- **OCR (Text Extraction)** — Extract text from any screen region with `Alt+O`
+- **Screenshot Capture** - Select any screen region with `Alt+S`
+- **OCR (Text Extraction)** - Extract text from any screen region with `Alt+O`
   - macOS: Powered by [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
   - Windows/Linux: Powered by AI vision models (OpenAI, Gemini, Anthropic)
   - Automatically copies extracted text to clipboard
 
 ### Chat & AI
-- **Multi-Provider Support** — Connect to your preferred AI provider:
+- **Multi-Provider Support** - Connect to your preferred AI provider:
   - OpenAI (GPT-5.*, etc.)
   - Google Gemini
   - Anthropic Claude
-- **Streaming Responses** — Real-time streaming for a smooth chat experience
-- **Model Selection** — Fetch and select from available models per provider
-- **Tool Use** — AI can invoke plugins as tools (weather, notes, network info, web search, calculations, file search)
-- **Image Upload** — Paste or attach images in chat for vision model analysis (up to 5 images, 5 MB each)
+- **Streaming Responses** - Real-time streaming for a smooth chat experience
+- **Model Selection** - Fetch and select from available models per provider
+- **Tool Use** - AI can invoke plugins as tools (weather, notes, network info, web search, calculations, file search)
+- **Image Upload** - Paste or attach images in chat for vision model analysis (up to 5 images, 5 MB each)
 
 ### System Integration
-- **Global Hotkeys** — Invoke from anywhere with system-wide shortcuts
-- **System Tray** — Runs quietly in the background with tray icon access
-- **Auto-Hide** — Window hides automatically when focus is lost
-- **Cross-Platform Shortcuts** — Smart `Ctrl`/`⌘` key detection per platform
+- **Global Hotkeys** - Invoke from anywhere with system-wide shortcuts
+- **System Tray** - Runs quietly in the background with tray icon access
+- **Auto-Hide** - Window hides automatically when focus is lost
+- **Cross-Platform Shortcuts** - Smart `Ctrl`/`⌘` key detection per platform
 
 ---
 
 ## Screenshots
 
-*Screenshots coming soon*
+#### Default look
+<p>
+<img width="400" height="auto" alt="gquick-default-look" src="https://github.com/user-attachments/assets/7b4d8d92-6f67-4603-a1ec-d131ed25a522" />
+</p>
+
+#### Compact look
+<p>
+<img width="400" height="auto" alt="gquick-compact-look" src="https://github.com/user-attachments/assets/0113cf17-8af2-443e-b604-354bcc183911" />
+</p>
+
+#### "Actions" panel
+<p>
+<img width="400" height="auto" alt="Screenshot 2026-05-03 at 11 24 02" src="https://github.com/user-attachments/assets/e85c513e-9907-46ef-8fdf-20a8fb14b389" />
+</p>
+
 
 ---
 
@@ -106,7 +120,7 @@ See [Building from Source](#building-from-source) below.
 
 ### Getting Started
 
-1. Launch GQuick — it will appear in your system tray
+1. Launch GQuick - it will appear in your system tray
 2. Press `Alt+Space` (macOS/Linux) or `Alt+Shift+Space` (Windows) to toggle the launcher
 3. Type to search across all plugins
 4. Use `↑` / `↓` to navigate results, `Enter` to select
@@ -114,8 +128,8 @@ See [Building from Source](#building-from-source) below.
 ### Terminal Commands
 
 Type `> <command>` to run shell commands directly from the launcher:
-- **Enter** — Opens the command in your default terminal
-- **Left Shift + Enter** — Runs the command inline (non-interactive commands only)
+- **Enter** - Opens the command in your default terminal
+- **Left Shift + Enter** - Runs the command inline (non-interactive commands only)
 
 ### Quick Note & Note Search
 
@@ -177,15 +191,15 @@ Press `Ctrl/Cmd+,` to open settings where you can:
 ```
 
 GQuick uses **Tauri 2.0** architecture with a clear separation between:
-- **Rust Backend** — System integration, screen capture, shortcuts, system tray, runtime file search, and terminal helpers
-- **React Frontend** — UI rendering, plugin system, settings, chat interface
+- **Rust Backend** - System integration, screen capture, shortcuts, system tray, runtime file search, and terminal helpers
+- **React Frontend** - UI rendering, plugin system, settings, chat interface
 
 ### Key Design Decisions
 
-- **Rust handles screen capture** — Avoids CORS/security issues, provides native performance
-- **Plugin architecture** — Decoupled search providers for easy extensibility
-- **Single HTML entry with window routing** — `main.tsx` uses Tauri window labels to render App vs Selector
-- **Local state only** — No external state library; React `useState`/`useEffect` with `localStorage` persistence
+- **Rust handles screen capture** - Avoids CORS/security issues, provides native performance
+- **Plugin architecture** - Decoupled search providers for easy extensibility
+- **Single HTML entry with window routing** - `main.tsx` uses Tauri window labels to render App vs Selector
+- **Local state only** - No external state library; React `useState`/`useEffect` with `localStorage` persistence
 
 ---
 
@@ -398,7 +412,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Built with [Tauri](https://tauri.app) — Rust-powered desktop framework
+- Built with [Tauri](https://tauri.app) - Rust-powered desktop framework
 - UI powered by [React](https://react.dev) and [Tailwind CSS](https://tailwindcss.com)
 - Icons by [Lucide](https://lucide.dev)
 - OCR powered by [Tesseract](https://github.com/tesseract-ocr/tesseract) on macOS, AI vision models on Windows/Linux

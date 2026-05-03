@@ -618,7 +618,8 @@
        ═══════════════════════════════════════════ */
     .download-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: minmax(0, 420px);
+      justify-content: center;
       gap: 24px;
       margin-bottom: 48px;
     }
@@ -637,6 +638,10 @@
       box-shadow: 0 0 40px rgba(59, 130, 246, 0.08);
     }
 
+    .download-card--latest {
+      background: linear-gradient(180deg, var(--bg-surface) 0%, rgba(59, 130, 246, 0.04) 100%);
+    }
+
     .download-card .platform-icon {
       font-size: 2rem;
       margin-bottom: 16px;
@@ -653,6 +658,13 @@
       font-size: 1.25rem;
       font-weight: 600;
       color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+
+    .download-card p {
+      font-size: 0.9375rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
       margin-bottom: 24px;
     }
 
@@ -674,10 +686,24 @@
       transition: all 0.2s ease;
     }
 
+    .download-btn--primary {
+      background: var(--brand-primary);
+      border-color: var(--brand-primary);
+      color: white;
+      font-weight: 600;
+    }
+
     .download-btn:hover {
       background: var(--brand-primary);
       border-color: var(--brand-primary);
       color: white;
+    }
+
+    .download-btn--primary:hover {
+      background: var(--brand-hover);
+      border-color: var(--brand-hover);
+      box-shadow: 0 0 30px var(--brand-glow);
+      transform: translateY(-1px);
     }
 
     .download-btn:last-child {
@@ -869,10 +895,6 @@
         grid-template-columns: repeat(2, 1fr);
       }
 
-      .download-grid {
-        grid-template-columns: repeat(2, 1fr);
-      }
-
       .navbar-toggle { display: none; }
     }
 
@@ -881,10 +903,6 @@
        ═══════════════════════════════════════════ */
     @media (min-width: 1024px) {
       .features-grid {
-        grid-template-columns: repeat(3, 1fr);
-      }
-
-      .download-grid {
         grid-template-columns: repeat(3, 1fr);
       }
 
@@ -951,7 +969,7 @@
             <h1>Spotlight for your desktop</h1>
             <p>Launch apps, search files, run commands, chat with AI — all from one shortcut.</p>
             <div class="hero-cta">
-              <a href="https://github.com/rickydane/gquick/releases" class="btn-primary" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/rickydane/gquick/releases/latest" class="btn-primary" target="_blank" rel="noopener noreferrer">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
                 Download for Free
               </a>
@@ -1177,56 +1195,26 @@
       <div class="container">
         <div class="section-header fade-in">
           <h2>Download GQuick</h2>
-          <p>Available for macOS, Windows, and Linux. Free and open source.</p>
+          <p>Get the latest release from GitHub. Pick the asset for your operating system there.</p>
         </div>
         <div class="download-grid fade-in">
 
-          <!-- macOS -->
-          <div class="download-card">
+          <!-- Latest GitHub release -->
+          <div class="download-card download-card--latest">
             <span class="platform-icon">
-              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06Z"/><path d="M10 2c1 .5 2 2 2 5"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             </span>
-            <h3>macOS</h3>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              Apple Silicon <span class="format">.dmg</span>
-            </a>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              Intel <span class="format">.dmg</span>
-            </a>
-          </div>
-
-          <!-- Windows -->
-          <div class="download-card">
-            <span class="platform-icon">
-              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
-            </span>
-            <h3>Windows</h3>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              Windows <span class="format">.msi</span>
-            </a>
-          </div>
-
-          <!-- Linux -->
-          <div class="download-card">
-            <span class="platform-icon">
-              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10H12V2z"/></svg>
-            </span>
-            <h3>Linux</h3>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              .deb <span class="format">Debian/Ubuntu</span>
-            </a>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              .rpm <span class="format">Fedora/RHEL</span>
-            </a>
-            <a href="https://github.com/rickydane/gquick/releases" class="download-btn" target="_blank" rel="noopener noreferrer">
-              .AppImage <span class="format">Universal</span>
+            <h3>Latest GitHub release</h3>
+            <p>GitHub shows the newest GQuick version and all available installer assets for macOS, Windows, and Linux.</p>
+            <a href="https://github.com/rickydane/gquick/releases/latest" class="download-btn download-btn--primary" target="_blank" rel="noopener noreferrer">
+              Open latest release
             </a>
           </div>
 
         </div>
         <div class="download-all fade-in">
-          <a href="https://github.com/rickydane/gquick/releases" target="_blank" rel="noopener noreferrer">
-            View all releases on GitHub
+          <a href="https://github.com/rickydane/gquick/releases/latest" target="_blank" rel="noopener noreferrer">
+            Go to the latest GitHub release
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
           </a>
         </div>

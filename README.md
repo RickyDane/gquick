@@ -79,7 +79,21 @@ GQuick is a Spotlight-like desktop launcher that helps you open apps, search fil
 
 ## Screenshots
 
-*Screenshots coming soon*
+#### Default look
+<p>
+<img width="400" height="auto" alt="gquick-default-look" src="https://github.com/user-attachments/assets/7b4d8d92-6f67-4603-a1ec-d131ed25a522" />
+</p>
+
+#### Compact look
+<p>
+<img width="400" height="auto" alt="gquick-compact-look" src="https://github.com/user-attachments/assets/0113cf17-8af2-443e-b604-354bcc183911" />
+</p>
+
+#### "Actions" panel
+<p>
+<img width="400" height="auto" alt="Screenshot 2026-05-03 at 11 24 02" src="https://github.com/user-attachments/assets/e85c513e-9907-46ef-8fdf-20a8fb14b389" />
+</p>
+
 
 ---
 

@@ -12,23 +12,37 @@ use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState as GsShortcutState,
 };
 use tauri_plugin_opener::OpenerExt;
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{
+    tauri_panel, CollectionBehavior, PanelLevel, StyleMask,
+    WebviewWindowExt as PanelWindowExt,
+};
+
 #[cfg(target_os = "macos")]
 use tesseract::Tesseract;
 
 #[cfg(target_os = "macos")]
-use objc2::rc::Retained;
-
-#[cfg(target_os = "macos")]
-use objc2::{class, extern_class, extern_methods, msg_send, sel};
-
-#[cfg(target_os = "macos")]
-use objc2::runtime::NSObject;
+use objc2::{class, extern_class, extern_methods, sel};
 
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
 
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
+
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(GQuickPanel {
+        config: {
+            can_become_key_window: true,
+            can_become_main_window: false,
+            is_floating_panel: true,
+            hides_on_deactivate: false,
+            works_when_modal: true
+        }
+    })
+}
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreWLAN", kind = "framework")]
@@ -3177,7 +3191,17 @@ fn restore_previous_focus<R: Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 fn hide_window<R: Runtime>(window: &tauri::Window<R>, restore_focus: bool) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = window.app_handle().get_webview_panel(window.label()) {
+            panel.hide();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.hide().map_err(|e| e.to_string())?;
+    }
     window
         .emit("window-hidden", ())
         .map_err(|e| e.to_string())?;
@@ -4693,7 +4717,6 @@ fn show_selector_window(app: &tauri::AppHandle, mode: &str) {
 
             match builder.build() {
                 Ok(window) => {
-                    log_capture("selector window built successfully");
                     if let Err(e) = window.set_focus() {
                         log_capture(&format!("FAILED to focus selector window: {}", e));
                     }
@@ -4928,6 +4951,14 @@ async fn open_image_dialog(
     }
 
     // Show and focus the main window again
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = app.get_webview_panel("main") {
+            panel.show_and_make_key();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -4974,13 +5005,32 @@ async fn open_image_dialog(
 
 fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let is_visible = {
+            use tauri_nspanel::ManagerExt;
+            app.get_webview_panel("main")
+                .map(|p| p.is_visible())
+                .unwrap_or(false)
+        };
+        #[cfg(not(target_os = "macos"))]
         let is_visible = window.is_visible().unwrap_or(false);
+
         if is_visible {
             if has_running_inline_command(app) {
                 let _ = window.emit("terminal-close-requested", "toggle".to_string());
                 return;
             }
-            let _ = window.hide();
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_nspanel::ManagerExt;
+                if let Ok(panel) = app.get_webview_panel("main") {
+                    panel.hide();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = window.hide();
+            }
             let _ = window.emit("window-hidden", ());
             restore_previous_focus(app);
         } else {
@@ -4991,6 +5041,14 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let was_visible = {
+            use tauri_nspanel::ManagerExt;
+            app.get_webview_panel("main")
+                .map(|p| p.is_visible())
+                .unwrap_or(false)
+        };
+        #[cfg(not(target_os = "macos"))]
         let was_visible = window.is_visible().unwrap_or(false);
 
         if !was_visible {
@@ -5022,8 +5080,20 @@ fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
             }
         }
 
-        let _ = window.show();
-        let _ = window.set_focus();
+        #[cfg(target_os = "macos")]
+        {
+            use tauri_nspanel::ManagerExt;
+            if let Ok(panel) = app.get_webview_panel("main") {
+                panel.show_and_make_key();
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+
         if !was_visible {
             let _ = window.emit("window-shown", ());
         }
@@ -5040,7 +5110,7 @@ fn open_settings_window<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
@@ -5087,11 +5157,40 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .setup(|app| {
             // Hide dock icon on macOS, keep only tray icon
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                // Convert the main window to an NSPanel so it can overlay fullscreen apps.
+                if let Some(window) = app.get_webview_window("main") {
+                    let panel = window.to_panel::<GQuickPanel>().expect("failed to convert main window to panel");
+                    panel.set_level(PanelLevel::ScreenSaver.value());
+                    panel.set_collection_behavior(
+                        CollectionBehavior::new()
+                            .can_join_all_spaces()
+                            .stationary()
+                            .full_screen_auxiliary()
+                            .ignores_cycle()
+                            .value(),
+                    );
+                    panel.set_style_mask(
+                        StyleMask::empty()
+                            .borderless()
+                            .nonactivating_panel()
+                            .value(),
+                    );
+                }
+            }
 
             let open_i = MenuItem::with_id(app, "open", "Open GQuick", true, None::<&str>)?;
             let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;

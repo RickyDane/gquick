@@ -5172,24 +5172,25 @@ pub fn run() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
                 // Convert the main window to an NSPanel so it can overlay fullscreen apps.
-                if let Some(window) = app.get_webview_window("main") {
-                    let panel = window.to_panel::<GQuickPanel>().expect("failed to convert main window to panel");
-                    panel.set_level(PanelLevel::ScreenSaver.value());
-                    panel.set_collection_behavior(
-                        CollectionBehavior::new()
-                            .can_join_all_spaces()
-                            .stationary()
-                            .full_screen_auxiliary()
-                            .ignores_cycle()
-                            .value(),
-                    );
-                    panel.set_style_mask(
-                        StyleMask::empty()
-                            .borderless()
-                            .nonactivating_panel()
-                            .value(),
-                    );
-                }
+                let window = app.get_webview_window("main")
+                    .ok_or("Failed to get main window during startup")?;
+                let panel = window.to_panel::<GQuickPanel>()
+                    .map_err(|e| format!("Failed to convert main window to panel: {}", e))?;
+                panel.set_level(PanelLevel::ScreenSaver.value());
+                panel.set_collection_behavior(
+                    CollectionBehavior::new()
+                        .can_join_all_spaces()
+                        .stationary()
+                        .full_screen_auxiliary()
+                        .ignores_cycle()
+                        .value(),
+                );
+                panel.set_style_mask(
+                    StyleMask::empty()
+                        .borderless()
+                        .nonactivating_panel()
+                        .value(),
+                );
             }
 
             let open_i = MenuItem::with_id(app, "open", "Open GQuick", true, None::<&str>)?;

@@ -28,7 +28,7 @@ export const notesPlugin: GQuickPlugin = {
     id: "notes",
     title: "Notes",
     icon: StickyNote,
-    keywords: ["note", "memo", "remember", "save"],
+    keywords: ["note", "notes", "memo"],
     queryPrefixes: ["note:", "notes:", "search notes:"],
   },
   tools: [

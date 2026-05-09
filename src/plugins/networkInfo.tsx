@@ -116,7 +116,7 @@ export const networkInfoPlugin: GQuickPlugin = {
     title: "Network info",
     subtitle: "IP, Wi-Fi, and latency",
     icon: Network,
-    keywords: ["net", "network", "ip", "wifi", "ping", "latency"],
+    keywords: ["net", "network", "wifi", "wi-fi"],
     queryPrefixes: [/^(net|network)(:|\b)/i, /^(wifi|wi-fi)$/i],
   },
   shouldSearch: isNetworkQuery,

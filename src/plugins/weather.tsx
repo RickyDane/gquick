@@ -270,7 +270,7 @@ export const weatherPlugin: GQuickPlugin = {
     title: "Weather",
     subtitle: "Weather forecast",
     icon: CloudSun,
-    keywords: ["weather", "forecast", "temperature", "rain", "sun", "climate"],
+    keywords: ["weather", "forecast"],
     queryPrefixes: ["/wt", "weather:"],
   },
   tools: [

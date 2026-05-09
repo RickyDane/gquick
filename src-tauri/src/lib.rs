@@ -4098,7 +4098,9 @@ fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -
 
         let mut paths = vec![
             "/Applications".to_string(),
+            "/Applications/Utilities".to_string(),
             "/System/Applications".to_string(),
+            "/System/Applications/Utilities".to_string(),
         ];
         if let Ok(home) = std::env::var("HOME") {
             paths.push(format!("{}/Applications", home));
@@ -4107,18 +4109,26 @@ fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -
         let mut app_entries: Vec<(std::path::PathBuf, String)> = Vec::new();
 
         for path in paths {
-            if let Ok(entries) = std::fs::read_dir(&path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path
-                        .extension()
-                        .map_or(false, |ext| ext.eq_ignore_ascii_case("app"))
-                    {
-                        let name = path
-                            .file_stem()
-                            .map_or("Unknown".to_string(), |s| s.to_string_lossy().to_string());
-                        app_entries.push((path, name));
+            match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut count = 0;
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path
+                            .extension()
+                            .map_or(false, |ext| ext.eq_ignore_ascii_case("app"))
+                        {
+                            let name = path
+                                .file_stem()
+                                .map_or("Unknown".to_string(), |s| s.to_string_lossy().to_string());
+                            app_entries.push((path, name));
+                            count += 1;
+                        }
                     }
+                    println!("list_apps: found {} apps in {}", count, path);
+                }
+                Err(e) => {
+                    eprintln!("list_apps: failed to read directory {}: {}", path, e);
                 }
             }
         }
@@ -4366,10 +4376,13 @@ fn capture_region(
             cropped.height()
         ));
 
-        let desktop_dir = dirs::desktop_dir().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
-        let path = desktop_dir
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+        std::fs::create_dir_all(&app_data_dir)
+            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+        let path = app_data_dir
             .join("gquick_capture.png")
             .to_string_lossy()
             .to_string();

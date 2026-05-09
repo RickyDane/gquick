@@ -268,7 +268,7 @@ export const translatePlugin: GQuickPlugin = {
     title: "Translate",
     subtitle: "AI-powered text translation",
     icon: Languages,
-    keywords: ["translate", "translation", "language", "convert text"],
+    keywords: ["translate", "translation"],
     queryPrefixes: ["translate:", "/tr", "tr:"],
   },
   shouldSearch: (query: string) => {

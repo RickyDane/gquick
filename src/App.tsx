@@ -18,6 +18,7 @@ import { getAllTools, executeTool, convertToolsForProvider, convertToolsForOpenA
 import { ToolCall } from "./plugins/types";
 import { getSavedLocation } from "./utils/location";
 import { recordUsage, getRecentItems } from "./utils/usageTracker";
+import { isSpeedtestRunning, cancelSpeedtest } from "./plugins/speedtest";
 import UpdateModal from "./components/UpdateModal";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -956,6 +957,14 @@ function App() {
       }
 
       if (e.key === "Escape") {
+        if (inlineCommandRef.current?.status === "running") {
+          void cancelInlineCommand();
+          return;
+        }
+        if (isSpeedtestRunning()) {
+          cancelSpeedtest();
+          return;
+        }
         if (view === "actions") {
           setView("search");
         } else if (view !== "search") {
@@ -965,6 +974,9 @@ function App() {
             setView("search");
             setQuery("");
           }
+        } else if (query !== "") {
+          setQuery("");
+          return;
         } else {
           void hideWindowSafely();
         }
@@ -987,7 +999,7 @@ function App() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", resetLeftShift);
     };
-  }, [view, attachedImages, hideWindowSafely]);
+  }, [view, attachedImages, hideWindowSafely, cancelInlineCommand, query]);
 
   // Fetch items from plugins
   useEffect(() => {
@@ -1264,10 +1276,11 @@ function App() {
     const src = prefix.source;
     const altMatch = src.match(/\(([^)]+)\)/);
     if (altMatch) {
-      return altMatch[1].split("|").map(s => s.replace(/^\\\//, "/").replace(/\\/g, "")).join(", ");
+      // Return only the first alternative
+      return altMatch[1].split("|")[0].replace(/^\\\//, "/").replace(/\\/g, "");
     }
     // Strip anchors/flags for simple patterns
-    return src.replace(/^\^/, "").replace(/\$$/, "").replace(/\\\//g, "/");
+    return src.replace(/^\^/, "").replace(/\$/, "").replace(/\\\//g, "/");
   };
 
   const appActions = [
@@ -1700,7 +1713,6 @@ function App() {
               latestSearchQueryRef.current = nextQuery;
               searchRequestIdRef.current += 1;
               itemsRef.current = [];
-              setItems([]);
               setQuery(nextQuery);
               setActiveIndex(0);
             }
@@ -1879,8 +1891,8 @@ function App() {
                           </div>
                           <span className="text-xs text-zinc-600 font-mono shrink-0">
                             {plugin.queryPrefixes && plugin.queryPrefixes.length > 0
-                              ? plugin.queryPrefixes.map(formatQueryPrefix).join(", ")
-                              : plugin.keywords.slice(0, 2).join(", ")}
+                              ? formatQueryPrefix(plugin.queryPrefixes[0])
+                              : plugin.keywords[0] || ""}
                           </span>
                         </div>
                       );

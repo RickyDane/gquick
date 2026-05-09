@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, ChevronDown, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal, Plus, RefreshCw } from "lucide-react";
+import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, ChevronDown, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal, Plus, RefreshCw, Beer } from "lucide-react";
 import { cn } from "./utils/cn";
 import { getPluginsForQuery, plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
@@ -11,6 +11,7 @@ import { MarkdownMessage } from "./components/MarkdownMessage";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
+import { HomebrewView } from "./components/HomebrewView";
 import SearchSuggestions from "./components/SearchSuggestions";
 import { isQuickTranslateQuery, performQuickTranslate } from "./utils/quickTranslate";
 import { streamOpenAITools, streamOpenAIResponsesTools, streamGeminiTools, streamAnthropicTools } from "./utils/streaming";
@@ -31,6 +32,7 @@ const WINDOW_RESIZE_DEBOUNCE_MS = 80;
 /** Views that open in the expanded (larger) window. Add new views here. */
 const EXPANDED_WINDOW_VIEWS: Record<string, { width: number; height: number }> = {
   docker: { width: 1200, height: 860 },
+  homebrew: { width: 1200, height: 860 },
   chat: { width: 1200, height: 860 },
 };
 
@@ -54,6 +56,11 @@ function isChatShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean 
 function isDockerShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean {
   const isDKey = e.code === "KeyD" || e.key.toLowerCase() === "d";
   return (e.metaKey || e.ctrlKey) && e.shiftKey && isLeftShiftPressed && isDKey;
+}
+
+function isHomebrewShortcut(e: KeyboardEvent, isLeftShiftPressed: boolean): boolean {
+  const isBKey = e.code === "KeyB" || e.key.toLowerCase() === "b";
+  return (e.metaKey || e.ctrlKey) && e.shiftKey && isLeftShiftPressed && isBKey;
 }
 
 function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
@@ -236,7 +243,7 @@ function isLikelyInteractiveCommand(command: string): boolean {
 function App() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [view, setView] = useState<"search" | "chat" | "settings" | "actions" | "notes" | "docker">("search");
+  const [view, setView] = useState<"search" | "chat" | "settings" | "actions" | "notes" | "docker" | "homebrew">("search");
   const [activeActionIndex, setActiveActionIndex] = useState(0);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [items, setItems] = useState<SearchResultItem[]>([]);
@@ -288,6 +295,7 @@ function App() {
   const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
   const [notesSearchQuery, setNotesSearchQuery] = useState("");
   const [dockerSearchQuery, setDockerSearchQuery] = useState("");
+  const [homebrewSearchQuery, setHomebrewSearchQuery] = useState("");
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [autoCheckUpdateInfo, setAutoCheckUpdateInfo] = useState<{ version: string; body: string | null } | null>(null);
   const [autoCheckUpdateObj, setAutoCheckUpdateObj] = useState<any>(null);
@@ -470,6 +478,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleOpenHomebrew = () => {
+      setView("homebrew");
+    };
+    window.addEventListener("gquick-open-homebrew", handleOpenHomebrew);
+    return () => window.removeEventListener("gquick-open-homebrew", handleOpenHomebrew);
+  }, []);
+
+  useEffect(() => {
     const handleFocus = () => {
       inputRef.current?.focus();
     };
@@ -599,6 +615,7 @@ function App() {
         setInitialNoteId(null);
         setNotesSearchQuery("");
         setDockerSearchQuery("");
+        setHomebrewSearchQuery("");
       });
       if (disposed) cleanup();
       else unlisten = cleanup;
@@ -911,6 +928,15 @@ function App() {
         setChatInput("");
         setNotesContext(null);
         setDockerSearchQuery("");
+      }
+
+      if (isHomebrewShortcut(e, isLeftShiftPressedRef.current) && view !== "actions") {
+        e.preventDefault();
+        setView(prev => prev === "homebrew" ? "search" : "homebrew");
+        setQuery("");
+        setChatInput("");
+        setNotesContext(null);
+        setHomebrewSearchQuery("");
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === "n" && view !== "actions") {
@@ -1247,7 +1273,7 @@ function App() {
     inputRef.current?.focus();
   }, []);
 
-  const handleOpenView = useCallback((v: "chat" | "notes" | "docker" | "settings" | "actions") => {
+  const handleOpenView = useCallback((v: "chat" | "notes" | "docker" | "homebrew" | "settings" | "actions") => {
     if (v === "notes") setInitialNoteId(null);
     if (v === "docker") setDockerInitialImage(null);
     setView(v);
@@ -1287,6 +1313,7 @@ function App() {
     { id: "chat", label: "Open Chat", icon: MessageSquare, shortcut: `${modKey} L⇧ C`, onClick: () => setView("chat") },
     { id: "notes", label: "Notes", icon: StickyNote, shortcut: `${modKey} N`, onClick: () => { setInitialNoteId(null); setView("notes"); } },
     { id: "docker", label: "Docker", icon: Box, shortcut: `${modKey} L⇧ D`, onClick: () => { setDockerInitialImage(null); setView("docker"); } },
+    { id: "homebrew", label: "Homebrew", icon: Beer, shortcut: `${modKey} L⇧ B`, onClick: () => { setView("homebrew"); } },
     { id: "search-notes", label: "Search Notes", icon: Search, shortcut: `${modKey} ⇧ S`, onClick: () => { setView("search"); setQuery("search notes: "); inputRef.current?.focus(); } },
     { id: "settings", label: "Settings", icon: SettingsIcon, shortcut: `${modKey},`, onClick: () => setView("settings") },
   ];
@@ -1308,6 +1335,7 @@ function App() {
     { id: "chat", view: "chat" as const },
     { id: "notes", view: "notes" as const },
     { id: "docker", view: "docker" as const },
+    { id: "homebrew", view: "homebrew" as const },
     { id: "settings", view: "settings" as const },
     { id: "actions", view: "actions" as const },
   ];
@@ -1672,6 +1700,8 @@ function App() {
           <StickyNote className="mr-3 h-5 w-5 text-amber-400" />
         ) : view === "docker" ? (
           <Box className="mr-3 h-5 w-5 text-cyan-400" />
+        ) : view === "homebrew" ? (
+          <Beer className="mr-3 h-5 w-5 text-amber-400" />
         ) : (
           <MessageSquare className="mr-3 h-5 w-5 text-blue-400" />
         )}
@@ -1702,11 +1732,12 @@ function App() {
         <input
           ref={inputRef}
           type="text"
-          value={view === "chat" ? chatInput : view === "notes" ? notesSearchQuery : view === "docker" ? dockerSearchQuery : query}
+          value={view === "chat" ? chatInput : view === "notes" ? notesSearchQuery : view === "docker" ? dockerSearchQuery : view === "homebrew" ? homebrewSearchQuery : query}
           onChange={(e) => {
             if (view === "chat") setChatInput(e.target.value);
             else if (view === "notes") setNotesSearchQuery(e.target.value);
             else if (view === "docker") setDockerSearchQuery(e.target.value);
+            else if (view === "homebrew") setHomebrewSearchQuery(e.target.value);
             else {
               const nextQuery = e.target.value;
               if (nextQuery === query) return;
@@ -1723,7 +1754,7 @@ function App() {
           }}
           disabled={view === "settings"}
           readOnly={view === "actions"}
-          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Search notes..." : view === "docker" ? "Search Docker Hub, images, containers..." : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
+          placeholder={view === "settings" ? "Settings" : view === "actions" ? "Actions" : view === "notes" ? "Search notes..." : view === "docker" ? "Search Docker Hub, images, containers..." : view === "homebrew" ? "Search Homebrew packages..." : view === "search" ? "Search for apps, files, or ask anything..." : "Ask GQuick anything..."}
           className="min-w-0 flex-1 bg-transparent text-lg text-zinc-100 placeholder-zinc-500 outline-none disabled:opacity-50 read-only:opacity-50"
           spellCheck={false}
         />
@@ -1780,6 +1811,23 @@ function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => window.dispatchEvent(new CustomEvent("gquick-docker-refresh"))}
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10 cursor-pointer text-zinc-200"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span className="hidden min-[520px]:inline">Refresh</span>
+            </button>
+            <div
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium border transition-colors cursor-pointer bg-zinc-800 border-white/5 text-zinc-400 hover:bg-zinc-700"
+              onClick={() => setView("actions")}
+            >
+              <Command className="h-3 w-3" />
+              <span>K</span>
+            </div>
+          </div>
+        ) : view === "homebrew" ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("gquick-homebrew-refresh"))}
               className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10 cursor-pointer text-zinc-200"
             >
               <RefreshCw className="h-3 w-3" />
@@ -1851,7 +1899,7 @@ function App() {
                       onClick={action.onClick}
                     >
                       <div className="flex items-center gap-3">
-                        <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : action.id === "docker" ? "text-cyan-400" : "text-zinc-400")} />
+                        <Icon className={cn("h-5 w-5", action.id === "chat" ? "text-blue-400" : action.id === "notes" ? "text-amber-400" : action.id === "docker" ? "text-cyan-400" : action.id === "homebrew" ? "text-orange-400" : "text-zinc-400")} />
                         <span>{action.label}</span>
                       </div>
                       <span className="text-xs text-zinc-500">{action.shortcut}</span>
@@ -1905,6 +1953,8 @@ function App() {
             <NotesView initialNoteId={initialNoteId ?? undefined} searchQuery={notesSearchQuery} />
           ) : view === "docker" ? (
             <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
+          ) : view === "homebrew" ? (
+            <HomebrewView searchQuery={homebrewSearchQuery} onSearchQueryChange={setHomebrewSearchQuery} />
           ) : view === "chat" ? (
             <div className={cn("flex flex-col", isExpandedView(view) ? "flex-1 overflow-hidden min-h-0" : "h-[300px]")}>
               <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">

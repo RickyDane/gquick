@@ -318,6 +318,7 @@ export function HomebrewView({ searchQuery, onSearchQueryChange, initialPackage 
   }, [searchQuery, tab])
 
   async function runAction(action: () => Promise<unknown>, _label: string, actionId?: string) {
+    if (busy || pendingAction) return
     if (actionId) setPendingAction(actionId)
     setBusy(true)
     setOutput("")

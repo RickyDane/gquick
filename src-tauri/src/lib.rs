@@ -725,7 +725,7 @@ where
 {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(|e| docker_err("COMMAND_FAILED", format!("Background task failed: {e}")))
+        .map_err(|e| command_err("COMMAND_FAILED", format!("Background task failed: {e}")))
 }
 
 struct ShortcutState {
@@ -766,6 +766,138 @@ struct PreviousFocusTarget;
 
 struct TerminalState {
     inline_processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct BrewOperationEvent {
+    chunk: String,
+    seq: u64,
+    done: bool,
+    success: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrewOperationStatus {
+    running: bool,
+    command: Option<String>,
+    output: String,
+}
+
+#[derive(Clone)]
+struct BrewOperationManager {
+    running: Arc<Mutex<bool>>,
+    command: Arc<Mutex<Option<String>>>,
+    output: Arc<Mutex<String>>,
+    child: Arc<Mutex<Option<Child>>>,
+    seq: Arc<Mutex<u64>>,
+    op_id: Arc<Mutex<u64>>,
+}
+
+impl BrewOperationManager {
+    fn new() -> Self {
+        Self {
+            running: Arc::new(Mutex::new(false)),
+            command: Arc::new(Mutex::new(None)),
+            output: Arc::new(Mutex::new(String::new())),
+            child: Arc::new(Mutex::new(None)),
+            seq: Arc::new(Mutex::new(0)),
+            op_id: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn next_op_id(&self) -> u64 {
+        if let Ok(mut op_id) = self.op_id.lock() {
+            *op_id += 1;
+            *op_id
+        } else {
+            0
+        }
+    }
+
+    fn start(&self, command: String) -> Result<u64, String> {
+        let mut running = self.running.lock().map_err(|e| e.to_string())?;
+        if *running {
+            return Err("A Homebrew operation is already running.".into());
+        }
+        *running = true;
+        drop(running);
+
+        let mut cmd = self.command.lock().map_err(|e| e.to_string())?;
+        *cmd = Some(command);
+        drop(cmd);
+
+        let mut output = self.output.lock().map_err(|e| e.to_string())?;
+        output.clear();
+        drop(output);
+
+        let mut child = self.child.lock().map_err(|e| e.to_string())?;
+        *child = None;
+
+        let mut seq = self.seq.lock().map_err(|e| e.to_string())?;
+        *seq = 0;
+
+        let op_id = self.next_op_id();
+        Ok(op_id)
+    }
+
+    fn append_output(&self, op_id: u64, chunk: &str) {
+        if let Ok(current_op_id) = self.op_id.lock() {
+            if *current_op_id != op_id {
+                return;
+            }
+        }
+        if let Ok(mut output) = self.output.lock() {
+            output.push_str(chunk);
+        }
+    }
+
+    fn next_seq(&self) -> u64 {
+        if let Ok(mut seq) = self.seq.lock() {
+            *seq += 1;
+            *seq
+        } else {
+            0
+        }
+    }
+
+    fn finish(&self, op_id: u64, _success: bool) {
+        if let Ok(current_op_id) = self.op_id.lock() {
+            if *current_op_id != op_id {
+                return;
+            }
+        }
+        if let Ok(mut running) = self.running.lock() {
+            *running = false;
+        }
+        if let Ok(mut child) = self.child.lock() {
+            *child = None;
+        }
+    }
+
+    fn status(&self) -> Result<BrewOperationStatus, String> {
+        let running = self.running.lock().map_err(|e| e.to_string())?;
+        let command = self.command.lock().map_err(|e| e.to_string())?;
+        let output = self.output.lock().map_err(|e| e.to_string())?;
+        Ok(BrewOperationStatus {
+            running: *running,
+            command: command.clone(),
+            output: output.clone(),
+        })
+    }
+
+    fn cancel(&self) -> Result<(), String> {
+        let mut child = self.child.lock().map_err(|e| e.to_string())?;
+        if let Some(mut c) = child.take() {
+            terminate_process_tree(&mut c);
+            let _ = c.wait();
+        }
+        // Do not clear running or advance op_id here; let the worker's finish() do it.
+        Ok(())
+    }
+}
+
+struct BrewOperationState {
+    manager: BrewOperationManager,
 }
 
 #[derive(serde::Serialize)]
@@ -2026,7 +2158,7 @@ async fn search_docker_hub(
 
     let normalized = query.trim();
     if normalized.is_empty() {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             "Docker Hub query cannot be empty.".into(),
         ));
@@ -2037,10 +2169,10 @@ async fn search_docker_hub(
         .timeout(Duration::from_secs(10))
         .user_agent("GQuick/0.1 DockerHubSearch")
         .build()
-        .map_err(|e| docker_err("DOCKER_HUB_CLIENT_FAILED", e.to_string()))?;
+        .map_err(|e| command_err("DOCKER_HUB_CLIENT_FAILED", e.to_string()))?;
 
     let mut url = reqwest::Url::parse("https://hub.docker.com/v2/search/repositories/")
-        .map_err(|e| docker_err("DOCKER_HUB_URL_FAILED", e.to_string()))?;
+        .map_err(|e| command_err("DOCKER_HUB_URL_FAILED", e.to_string()))?;
     url.query_pairs_mut()
         .append_pair("query", normalized)
         .append_pair("page_size", &page_size.to_string());
@@ -2049,11 +2181,11 @@ async fn search_docker_hub(
         .get(url)
         .send()
         .await
-        .map_err(|e| docker_err("DOCKER_HUB_REQUEST_FAILED", e.to_string()))?;
+        .map_err(|e| command_err("DOCKER_HUB_REQUEST_FAILED", e.to_string()))?;
 
     let status = response.status();
     if !status.is_success() {
-        return Err(docker_err(
+        return Err(command_err(
             "DOCKER_HUB_REQUEST_FAILED",
             format!("Docker Hub returned HTTP {}.", status.as_u16()),
         ));
@@ -2062,7 +2194,7 @@ async fn search_docker_hub(
     let data = response
         .json::<DockerHubApiResponse>()
         .await
-        .map_err(|e| docker_err("DOCKER_HUB_PARSE_FAILED", e.to_string()))?;
+        .map_err(|e| command_err("DOCKER_HUB_PARSE_FAILED", e.to_string()))?;
 
     Ok(data
         .results
@@ -2102,13 +2234,13 @@ fn normalize_docker_hub_repository(item: DockerHubApiRepository) -> DockerHubRep
     }
 }
 
-fn docker_err(code: &str, message: String) -> String {
+fn command_err(code: &str, message: String) -> String {
     format!("{}: {}", code, message.trim())
 }
 
 fn validate_ref(value: &str, field: &str) -> Result<(), String> {
     if value.trim().is_empty() || value.contains('\0') || value.len() > 512 {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             format!("Invalid {}.", field),
         ));
@@ -2120,7 +2252,7 @@ fn require_confirmed(confirmed: Option<bool>, operation: &str) -> Result<(), Str
     if confirmed.unwrap_or(false) {
         Ok(())
     } else {
-        Err(docker_err(
+        Err(command_err(
             "CONFIRMATION_REQUIRED",
             format!("{} requires explicit backend confirmation.", operation),
         ))
@@ -3325,7 +3457,7 @@ fn hide_main_window(window: tauri::Window) -> Result<(), String> {
 fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
     let status = docker_status_blocking();
     if !status.cli_installed {
-        return Err(docker_err(
+        return Err(command_err(
             "CLI_MISSING",
             status
                 .error_message
@@ -3333,7 +3465,7 @@ fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
         ));
     }
     if !status.daemon_running {
-        return Err(docker_err(
+        return Err(command_err(
             "DAEMON_DOWN",
             status
                 .error_message
@@ -3346,7 +3478,7 @@ fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| docker_err("COMMAND_FAILED", e.to_string()))?;
+        .map_err(|e| command_err("COMMAND_FAILED", e.to_string()))?;
 
     let stdout_handle = child.stdout.take().map(read_pipe);
     let stderr_handle = child.stderr.take().map(read_pipe);
@@ -3356,14 +3488,14 @@ fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
     let status_code = loop {
         if let Some(status_code) = child
             .try_wait()
-            .map_err(|e| docker_err("COMMAND_FAILED", e.to_string()))?
+            .map_err(|e| command_err("COMMAND_FAILED", e.to_string()))?
         {
             break status_code;
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(docker_err("TIMEOUT", format!("Docker command timed out after {} seconds. Long operations may still be running in Docker; retry or check Docker Desktop/CLI output.", timeout.as_secs())));
+            return Err(command_err("TIMEOUT", format!("Docker command timed out after {} seconds. Long operations may still be running in Docker; retry or check Docker Desktop/CLI output.", timeout.as_secs())));
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -3371,22 +3503,22 @@ fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
     let stdout = match stdout_handle {
         Some(handle) => handle
             .join()
-            .map_err(|_| docker_err("COMMAND_FAILED", "Failed to read Docker stdout.".into()))?
-            .map_err(|e| docker_err("COMMAND_FAILED", e))?,
+            .map_err(|_| command_err("COMMAND_FAILED", "Failed to read Docker stdout.".into()))?
+            .map_err(|e| command_err("COMMAND_FAILED", e))?,
         None => String::new(),
     };
     let stderr = match stderr_handle {
         Some(handle) => handle
             .join()
-            .map_err(|_| docker_err("COMMAND_FAILED", "Failed to read Docker stderr.".into()))?
-            .map_err(|e| docker_err("COMMAND_FAILED", e))?,
+            .map_err(|_| command_err("COMMAND_FAILED", "Failed to read Docker stderr.".into()))?
+            .map_err(|e| command_err("COMMAND_FAILED", e))?,
         None => String::new(),
     };
 
     let result = DockerCommandResult { stdout, stderr };
 
     if !status_code.success() {
-        return Err(docker_err(
+        return Err(command_err(
             "COMMAND_FAILED",
             if result.stderr.trim().is_empty() {
                 result.stdout.clone()
@@ -3503,7 +3635,7 @@ fn manage_container_blocking(
         "start", "stop", "restart", "pause", "unpause", "remove", "kill",
     ];
     if !allowed.contains(&action.as_str()) {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             format!("Unsupported container action: {}", action),
         ));
@@ -3557,7 +3689,7 @@ fn run_container_blocking(options: RunContainerOptions) -> Result<DockerCommandR
         validate_ref(&port.container, "container port")?;
         let proto = port.protocol.unwrap_or_else(|| "tcp".into());
         if proto != "tcp" && proto != "udp" {
-            return Err(docker_err(
+            return Err(command_err(
                 "VALIDATION_FAILED",
                 "Protocol must be tcp or udp.".into(),
             ));
@@ -3598,7 +3730,7 @@ fn run_container_blocking(options: RunContainerOptions) -> Result<DockerCommandR
     let mut extras = options.extra_args.into_iter();
     while let Some(flag) = extras.next() {
         if !safe_extra.contains(&flag.as_str()) {
-            return Err(docker_err(
+            return Err(command_err(
                 "VALIDATION_FAILED",
                 format!("Unsupported advanced flag: {}", flag),
             ));
@@ -3649,7 +3781,7 @@ fn exec_container_blocking(
 ) -> Result<DockerCommandResult, String> {
     validate_ref(&id, "container id")?;
     if command.is_empty() {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             "Command is required.".into(),
         ));
@@ -3692,7 +3824,7 @@ fn prune_docker_blocking(
         "volumes" => vec!["volume".into(), "prune".into()],
         "system" => vec!["system".into(), "prune".into()],
         _ => {
-            return Err(docker_err(
+            return Err(command_err(
                 "VALIDATION_FAILED",
                 format!("Unsupported prune kind: {}", kind),
             ))
@@ -3727,13 +3859,13 @@ fn is_safe_compose_name(path: &Path) -> bool {
 fn validate_compose_path_for_read(path: &str) -> Result<PathBuf, String> {
     let path_ref = Path::new(path);
     if path.trim().is_empty() || path.contains('\0') || !is_safe_compose_name(path_ref) {
-        return Err(docker_err("VALIDATION_FAILED", "Compose file path must end with docker-compose.yml/yaml, compose.yml/yaml, or another *compose*.yml/yaml file.".into()));
+        return Err(command_err("VALIDATION_FAILED", "Compose file path must end with docker-compose.yml/yaml, compose.yml/yaml, or another *compose*.yml/yaml file.".into()));
     }
     let canonical = path_ref
         .canonicalize()
-        .map_err(|_| docker_err("VALIDATION_FAILED", "Compose file does not exist.".into()))?;
+        .map_err(|_| command_err("VALIDATION_FAILED", "Compose file does not exist.".into()))?;
     if !canonical.is_file() {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             "Compose file does not exist.".into(),
         ));
@@ -3744,32 +3876,32 @@ fn validate_compose_path_for_read(path: &str) -> Result<PathBuf, String> {
 fn validate_compose_path_for_write(path: &str) -> Result<PathBuf, String> {
     let path_ref = Path::new(path);
     if path.trim().is_empty() || path.contains('\0') || !is_safe_compose_name(path_ref) {
-        return Err(docker_err("VALIDATION_FAILED", "Compose file path must end with docker-compose.yml/yaml, compose.yml/yaml, or another *compose*.yml/yaml file.".into()));
+        return Err(command_err("VALIDATION_FAILED", "Compose file path must end with docker-compose.yml/yaml, compose.yml/yaml, or another *compose*.yml/yaml file.".into()));
     }
     if path_ref
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(docker_err(
+        return Err(command_err(
             "VALIDATION_FAILED",
             "Compose file path cannot contain parent-directory traversal.".into(),
         ));
     }
     let parent = path_ref.parent().ok_or_else(|| {
-        docker_err(
+        command_err(
             "VALIDATION_FAILED",
             "Compose file parent directory is required.".into(),
         )
     })?;
     let canonical_parent = parent.canonicalize().map_err(|_| {
-        docker_err(
+        command_err(
             "VALIDATION_FAILED",
             "Compose file parent directory does not exist.".into(),
         )
     })?;
     Ok(canonical_parent.join(
         path_ref.file_name().ok_or_else(|| {
-            docker_err("VALIDATION_FAILED", "Compose file name is required.".into())
+            command_err("VALIDATION_FAILED", "Compose file name is required.".into())
         })?,
     ))
 }
@@ -3781,7 +3913,7 @@ async fn compose_read_file(path: String) -> Result<String, String> {
 
 fn compose_read_file_blocking(path: String) -> Result<String, String> {
     let path_ref = validate_compose_path_for_read(&path)?;
-    std::fs::read_to_string(path_ref).map_err(|e| docker_err("COMMAND_FAILED", e.to_string()))
+    std::fs::read_to_string(path_ref).map_err(|e| command_err("COMMAND_FAILED", e.to_string()))
 }
 
 #[tauri::command]
@@ -3803,14 +3935,14 @@ fn compose_write_file_blocking(
     let path_ref = validate_compose_path_for_write(&path)?;
     if path_ref.exists() {
         if !overwrite.unwrap_or(false) {
-            return Err(docker_err(
+            return Err(command_err(
                 "VALIDATION_FAILED",
                 "File exists; confirm overwrite first.".into(),
             ));
         }
         require_confirmed(confirmed, "Overwriting compose files")?;
     }
-    std::fs::write(path_ref, content).map_err(|e| docker_err("COMMAND_FAILED", e.to_string()))
+    std::fs::write(path_ref, content).map_err(|e| command_err("COMMAND_FAILED", e.to_string()))
 }
 
 #[tauri::command]
@@ -3852,13 +3984,895 @@ fn compose_action_blocking(
         }
         "pull" | "logs" | "ps" | "restart" => {}
         _ => {
-            return Err(docker_err(
+            return Err(command_err(
                 "VALIDATION_FAILED",
                 format!("Unsupported compose action: {}", action),
             ))
         }
     }
     docker_output(&args)
+}
+
+fn brew_err(code: &str, message: String) -> String {
+    format!("{}: {}", code, message.trim())
+}
+
+#[derive(serde::Serialize)]
+struct BrewStatus {
+    installed: bool,
+    version: Option<String>,
+    prefix: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BrewPackage {
+    name: String,
+    version: String,
+    tap: String,
+    desc: Option<String>,
+    homepage: Option<String>,
+    is_cask: bool,
+    outdated: bool,
+    latest_version: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BrewSearchResult {
+    name: String,
+    description: Option<String>,
+    version: Option<String>,
+    tap: String,
+    is_cask: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrewInfo {
+    name: String,
+    description: Option<String>,
+    homepage: Option<String>,
+    versions: Versions,
+    installed: Vec<InstalledVersion>,
+    caveats: Option<String>,
+    dependencies: Vec<String>,
+    tap: String,
+    is_cask: bool,
+}
+
+#[derive(serde::Serialize)]
+struct Versions {
+    stable: Option<String>,
+    head: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct InstalledVersion {
+    version: String,
+    installed_as_dependency: bool,
+    installed_on_request: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrewCommandResult {
+    stdout: String,
+    stderr: String,
+    success: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrewOutdatedPackage {
+    name: String,
+    installed_version: String,
+    current_version: String,
+    is_cask: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_cli_installed() -> bool {
+    Command::new("brew")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_command_output(args: &[String], timeout: Duration) -> Result<BrewCommandResult, String> {
+    if !brew_cli_installed() {
+        return Err(brew_err(
+            "CLI_MISSING",
+            "Homebrew is not installed or not on PATH.".into(),
+        ));
+    }
+    let mut child = Command::new("brew")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| brew_err("COMMAND_FAILED", e.to_string()))?;
+    let stdout_handle = child.stdout.take().map(read_pipe);
+    let stderr_handle = child.stderr.take().map(read_pipe);
+    let started = Instant::now();
+    let status_code = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() <= timeout => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(brew_err(
+                    "TIMEOUT",
+                    format!(
+                        "Homebrew command timed out after {} seconds.",
+                        timeout.as_secs()
+                    ),
+                ));
+            }
+        }
+    };
+    let stdout = match stdout_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| brew_err("COMMAND_FAILED", "Failed to read stdout.".into()))?
+            .map_err(|e| brew_err("COMMAND_FAILED", e))?,
+        None => String::new(),
+    };
+    let stderr = match stderr_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| brew_err("COMMAND_FAILED", "Failed to read stderr.".into()))?
+            .map_err(|e| brew_err("COMMAND_FAILED", e))?,
+        None => String::new(),
+    };
+    Ok(BrewCommandResult {
+        stdout,
+        stderr,
+        success: status_code.success(),
+    })
+}
+
+#[tauri::command]
+async fn brew_status() -> BrewStatus {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        BrewStatus {
+            installed: false,
+            version: None,
+            prefix: None,
+            error: Some("Homebrew is not available on this platform.".into()),
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        match run_blocking(brew_status_blocking).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(error)) | Err(error) => BrewStatus {
+                installed: false,
+                version: None,
+                prefix: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_status_blocking() -> Result<BrewStatus, String> {
+    let version_output = Command::new("brew").arg("--version").output();
+    let (installed, version) = match version_output {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let version = text.lines().next().map(|l| l.trim().to_string());
+            (true, version)
+        }
+        _ => (false, None),
+    };
+    let prefix = Command::new("brew")
+        .arg("--prefix")
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        });
+    let error = if installed {
+        None
+    } else {
+        Some("Homebrew is not installed or not on PATH.".into())
+    };
+    Ok(BrewStatus {
+        installed,
+        version,
+        prefix,
+        error,
+    })
+}
+
+#[tauri::command]
+async fn brew_list() -> Result<Vec<BrewPackage>, String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        run_blocking(brew_list_blocking).await?
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_list_blocking() -> Result<Vec<BrewPackage>, String> {
+    let args = vec!["info".into(), "--installed".into(), "--json=v2".into()];
+    let result = brew_command_output(&args, Duration::from_secs(120))?;
+    if !result.success {
+        return Err(brew_err("COMMAND_FAILED", result.stderr));
+    }
+    let json: serde_json::Value = serde_json::from_str(&result.stdout)
+        .map_err(|e| brew_err("PARSE_FAILED", e.to_string()))?;
+    let mut packages = Vec::new();
+    if let Some(formulae) = json.get("formulae").and_then(|v| v.as_array()) {
+        for f in formulae {
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tap = f
+                .get("tap")
+                .and_then(|v| v.as_str())
+                .unwrap_or("homebrew/core")
+                .to_string();
+            let desc = f.get("desc").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let homepage = f
+                .get("homepage")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let version = f
+                .get("installed")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("version"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let outdated = f.get("outdated").and_then(|v| v.as_bool()).unwrap_or(false);
+            let latest = f
+                .get("versions")
+                .and_then(|v| v.get("stable"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            packages.push(BrewPackage {
+                name: name.clone(),
+                version,
+                tap,
+                desc,
+                homepage,
+                is_cask: false,
+                outdated,
+                latest_version: latest,
+            });
+        }
+    }
+    if let Some(casks) = json.get("casks").and_then(|v| v.as_array()) {
+        for c in casks {
+            let name = c.get("token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tap = c
+                .get("tap")
+                .and_then(|v| v.as_str())
+                .unwrap_or("homebrew/cask")
+                .to_string();
+            let desc = c.get("desc").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let homepage = c
+                .get("homepage")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let version = c
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let outdated = c.get("outdated").and_then(|v| v.as_bool()).unwrap_or(false);
+            let latest = c
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            packages.push(BrewPackage {
+                name: name.clone(),
+                version,
+                tap,
+                desc,
+                homepage,
+                is_cask: true,
+                outdated,
+                latest_version: latest,
+            });
+        }
+    }
+    Ok(packages)
+}
+
+#[tauri::command]
+async fn brew_search(query: String) -> Result<Vec<BrewSearchResult>, String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        run_blocking(move || brew_search_blocking(query)).await?
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_search_blocking(query: String) -> Result<Vec<BrewSearchResult>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err(brew_err("VALIDATION_FAILED", "Query cannot be empty.".into()));
+    }
+    let args = vec!["search".into(), trimmed.into()];
+    let result = brew_command_output(&args, Duration::from_secs(30))?;
+    if !result.success {
+        return Err(brew_err("COMMAND_FAILED", result.stderr));
+    }
+
+    let mut results = Vec::new();
+    let mut section = "formulae"; // "formulae" or "casks"
+
+    for line in result.stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.to_lowercase().contains("cask") {
+            section = "casks";
+            continue;
+        }
+        if line.starts_with("==") {
+            continue;
+        }
+        // Skip lines that look like tap paths (e.g., "homebrew/cask-fonts/")
+        if line.ends_with("/") || (line.contains("/") && !line.chars().next().unwrap_or(' ').is_alphanumeric()) {
+            continue;
+        }
+
+        let is_cask = section == "casks";
+        results.push(BrewSearchResult {
+            name: line.to_string(),
+            description: None,
+            version: None,
+            tap: if is_cask { "homebrew/cask".into() } else { "homebrew/core".into() },
+            is_cask,
+        });
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
+async fn brew_info(name: String) -> Result<BrewInfo, String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        run_blocking(move || brew_info_blocking(name)).await?
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_info_blocking(name: String) -> Result<BrewInfo, String> {
+    let args = vec!["info".into(), "--json=v2".into(), "--".into(), name.clone()];
+    let result = brew_command_output(&args, Duration::from_secs(60))?;
+    if !result.success {
+        return Err(brew_err("COMMAND_FAILED", result.stderr));
+    }
+    let json: serde_json::Value = serde_json::from_str(&result.stdout)
+        .map_err(|e| brew_err("PARSE_FAILED", e.to_string()))?;
+    if let Some(formulae) = json.get("formulae").and_then(|v| v.as_array()) {
+        if let Some(f) = formulae.first() {
+            return parse_formula_info(f);
+        }
+    }
+    if let Some(casks) = json.get("casks").and_then(|v| v.as_array()) {
+        if let Some(c) = casks.first() {
+            return parse_cask_info(c);
+        }
+    }
+    Err(brew_err("NOT_FOUND", format!("Package {} not found.", name)))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn parse_formula_info(value: &serde_json::Value) -> Result<BrewInfo, String> {
+    let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let description = value.get("desc").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let homepage = value
+        .get("homepage")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let stable = value
+        .get("versions")
+        .and_then(|v| v.get("stable"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let head = value
+        .get("versions")
+        .and_then(|v| v.get("head"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let caveats = value
+        .get("caveats")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let dependencies = value
+        .get("dependencies")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let tap = value
+        .get("tap")
+        .and_then(|v| v.as_str())
+        .unwrap_or("homebrew/core")
+        .to_string();
+    let installed = value
+        .get("installed")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|i| {
+                    let version = i.get("version").and_then(|v| v.as_str())?.to_string();
+                    let installed_as_dependency = i
+                        .get("installed_as_dependency")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let installed_on_request = i
+                        .get("installed_on_request")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    Some(InstalledVersion {
+                        version,
+                        installed_as_dependency,
+                        installed_on_request,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(BrewInfo {
+        name,
+        description,
+        homepage,
+        versions: Versions { stable, head },
+        installed,
+        caveats,
+        dependencies,
+        tap,
+        is_cask: false,
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn parse_cask_info(value: &serde_json::Value) -> Result<BrewInfo, String> {
+    let name = value
+        .get("token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = value.get("desc").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let homepage = value
+        .get("homepage")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let stable = value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let caveats = value
+        .get("caveats")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let tap = value
+        .get("tap")
+        .and_then(|v| v.as_str())
+        .unwrap_or("homebrew/cask")
+        .to_string();
+    let dependencies = value
+        .get("depends_on")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            let mut deps = Vec::new();
+            if let Some(formula) = obj.get("formula").and_then(|v| v.as_array()) {
+                deps.extend(
+                    formula
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string())),
+                );
+            }
+            if let Some(cask) = obj.get("cask").and_then(|v| v.as_array()) {
+                deps.extend(
+                    cask.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string())),
+                );
+            }
+            deps
+        })
+        .unwrap_or_default();
+    let installed = if let Some(installed_version) = value.get("installed").and_then(|v| v.as_str()) {
+        vec![InstalledVersion {
+            version: installed_version.to_string(),
+            installed_as_dependency: false,
+            installed_on_request: true,
+        }]
+    } else {
+        vec![]
+    };
+    Ok(BrewInfo {
+        name,
+        description,
+        homepage,
+        versions: Versions {
+            stable,
+            head: None,
+        },
+        installed,
+        caveats,
+        dependencies,
+        tap,
+        is_cask: true,
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn run_brew_operation_in_background(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BrewOperationState>,
+    args: Vec<String>,
+    command_label: String,
+) -> Result<(), String> {
+    let manager = &state.manager;
+    if !brew_cli_installed() {
+        return Err(brew_err(
+            "CLI_MISSING",
+            "Homebrew is not installed or not on PATH.".into(),
+        ));
+    }
+    let op_id = manager.start(command_label)?;
+
+    let manager = manager.clone();
+    let app = app.clone();
+
+    std::thread::spawn(move || {
+        let mut command = Command::new("brew");
+        command.args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let child = match command.spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                let seq = manager.next_seq();
+                let _ = app.emit(
+                    "brew-operation-output",
+                    BrewOperationEvent {
+                        chunk: format!("Failed to start brew: {}\n", e),
+                        seq,
+                        done: true,
+                        success: false,
+                    },
+                );
+                manager.finish(op_id, false);
+                return;
+            }
+        };
+
+        {
+            if let Ok(mut c) = manager.child.lock() {
+                *c = Some(child);
+            }
+        }
+
+        let stdout = {
+            let mut c = manager.child.lock().unwrap();
+            c.as_mut().and_then(|c| c.stdout.take())
+        };
+        let stderr = {
+            let mut c = manager.child.lock().unwrap();
+            c.as_mut().and_then(|c| c.stderr.take())
+        };
+
+        let manager_stdout = manager.clone();
+        let app_stdout = app.clone();
+        let stdout_handle = stdout.map(|pipe| {
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(pipe);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        let chunk = format!("{}\n", line);
+                        manager_stdout.append_output(op_id, &chunk);
+                        let seq = manager_stdout.next_seq();
+                        let _ = app_stdout.emit(
+                            "brew-operation-output",
+                            BrewOperationEvent {
+                                chunk,
+                                seq,
+                                done: false,
+                                success: false,
+                            },
+                        );
+                    }
+                }
+            })
+        });
+
+        let manager_stderr = manager.clone();
+        let _app_stderr = app.clone();
+        let stderr_handle = stderr.map(|pipe| {
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(pipe);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        let chunk = format!("{}\n", line);
+                        manager_stderr.append_output(op_id, &chunk);
+                        // Do not emit stderr to avoid duplicate lines;
+                        // Homebrew often writes the same output to both stdout and stderr.
+                    }
+                }
+            })
+        });
+
+        let success = loop {
+            std::thread::sleep(Duration::from_millis(100));
+            let mut guard = manager.child.lock().unwrap();
+            if let Some(ref mut child) = *guard {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let success = status.success();
+                        drop(guard);
+                        break success;
+                    }
+                    Ok(None) => continue,
+                    Err(_) => {
+                        drop(guard);
+                        break false;
+                    }
+                }
+            } else {
+                drop(guard);
+                break false;
+            }
+        };
+
+        if let Some(h) = stdout_handle {
+            let _ = h.join();
+        }
+        if let Some(h) = stderr_handle {
+            let _ = h.join();
+        }
+
+        let seq = manager.next_seq();
+        let _ = app.emit(
+            "brew-operation-output",
+            BrewOperationEvent {
+                chunk: if success {
+                    "\nDone.\n".to_string()
+                } else {
+                    "\nFailed.\n".to_string()
+                },
+                seq,
+                done: true,
+                success,
+            },
+        );
+
+        manager.finish(op_id, success);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn brew_install(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BrewOperationState>,
+    name: String,
+    cask: bool,
+) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let mut args = vec!["install".into()];
+        if cask {
+            args.push("--cask".into());
+        }
+        args.push("--".into());
+        args.push(name.clone());
+        run_brew_operation_in_background(app, state, args, format!("Install {}", name))
+    }
+}
+
+#[tauri::command]
+async fn brew_uninstall(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BrewOperationState>,
+    name: String,
+    cask: bool,
+    confirmed: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        require_confirmed(confirmed, "Uninstalling Homebrew packages")?;
+        let mut args = vec!["uninstall".into()];
+        if cask {
+            args.push("--cask".into());
+        }
+        args.push("--".into());
+        args.push(name.clone());
+        run_brew_operation_in_background(app, state, args, format!("Uninstall {}", name))
+    }
+}
+
+#[tauri::command]
+async fn brew_upgrade(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BrewOperationState>,
+    name: Option<String>,
+    cask: bool,
+    confirmed: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if name.is_none() {
+            require_confirmed(confirmed, "Upgrading all Homebrew packages")?;
+        }
+        let mut args = vec!["upgrade".into()];
+        if cask {
+            args.push("--cask".into());
+        }
+        if let Some(n) = name.clone() {
+            args.push("--".into());
+            args.push(n);
+        }
+        let label = name.map(|n| format!("Upgrade {}", n)).unwrap_or_else(|| "Upgrade all".into());
+        run_brew_operation_in_background(app, state, args, label)
+    }
+}
+
+#[tauri::command]
+async fn brew_outdated() -> Result<Vec<BrewOutdatedPackage>, String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        run_blocking(brew_outdated_blocking).await?
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn brew_outdated_blocking() -> Result<Vec<BrewOutdatedPackage>, String> {
+    let args = vec!["outdated".into(), "--json=v2".into()];
+    let result = brew_command_output(&args, Duration::from_secs(60))?;
+    if !result.success {
+        return Err(brew_err("COMMAND_FAILED", result.stderr));
+    }
+    let json: serde_json::Value = serde_json::from_str(&result.stdout)
+        .map_err(|e| brew_err("PARSE_FAILED", e.to_string()))?;
+    let mut packages = Vec::new();
+    if let Some(formulae) = json.get("formulae").and_then(|v| v.as_array()) {
+        for f in formulae {
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let installed = f
+                .get("installed_versions")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let current = f
+                .get("current_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                packages.push(BrewOutdatedPackage {
+                    name,
+                    installed_version: installed,
+                    current_version: current,
+                    is_cask: false,
+                });
+            }
+        }
+    }
+    if let Some(casks) = json.get("casks").and_then(|v| v.as_array()) {
+        for c in casks {
+            let name = c
+                .get("token")
+                .or_else(|| c.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let installed = c
+                .get("installed_versions")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let current = c
+                .get("current_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                packages.push(BrewOutdatedPackage {
+                    name,
+                    installed_version: installed,
+                    current_version: current,
+                    is_cask: true,
+                });
+            }
+        }
+    }
+    Ok(packages)
+}
+
+#[tauri::command]
+async fn brew_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BrewOperationState>,
+) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Homebrew is not available on this platform.".into())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let args = vec!["update".into()];
+        run_brew_operation_in_background(app, state, args, "Update Homebrew".into())
+    }
+}
+
+#[tauri::command]
+fn brew_operation_status(
+    state: tauri::State<'_, BrewOperationState>,
+) -> Result<BrewOperationStatus, String> {
+    state.manager.status()
+}
+
+#[tauri::command]
+fn brew_operation_cancel(
+    state: tauri::State<'_, BrewOperationState>,
+) -> Result<(), String> {
+    state.manager.cancel()
 }
 
 #[cfg(target_os = "macos")]
@@ -4098,7 +5112,9 @@ fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -
 
         let mut paths = vec![
             "/Applications".to_string(),
+            "/Applications/Utilities".to_string(),
             "/System/Applications".to_string(),
+            "/System/Applications/Utilities".to_string(),
         ];
         if let Ok(home) = std::env::var("HOME") {
             paths.push(format!("{}/Applications", home));
@@ -4107,18 +5123,26 @@ fn list_apps(app: tauri::AppHandle, cache_state: tauri::State<AppsCacheState>) -
         let mut app_entries: Vec<(std::path::PathBuf, String)> = Vec::new();
 
         for path in paths {
-            if let Ok(entries) = std::fs::read_dir(&path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path
-                        .extension()
-                        .map_or(false, |ext| ext.eq_ignore_ascii_case("app"))
-                    {
-                        let name = path
-                            .file_stem()
-                            .map_or("Unknown".to_string(), |s| s.to_string_lossy().to_string());
-                        app_entries.push((path, name));
+            match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut count = 0;
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path
+                            .extension()
+                            .map_or(false, |ext| ext.eq_ignore_ascii_case("app"))
+                        {
+                            let name = path
+                                .file_stem()
+                                .map_or("Unknown".to_string(), |s| s.to_string_lossy().to_string());
+                            app_entries.push((path, name));
+                            count += 1;
+                        }
                     }
+                    println!("list_apps: found {} apps in {}", count, path);
+                }
+                Err(e) => {
+                    eprintln!("list_apps: failed to read directory {}: {}", path, e);
                 }
             }
         }
@@ -4366,10 +5390,13 @@ fn capture_region(
             cropped.height()
         ));
 
-        let desktop_dir = dirs::desktop_dir().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
-        let path = desktop_dir
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+        std::fs::create_dir_all(&app_data_dir)
+            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+        let path = app_data_dir
             .join("gquick_capture.png")
             .to_string_lossy()
             .to_string();
@@ -5243,6 +6270,10 @@ pub fn run() {
                 inline_processes: Arc::new(Mutex::new(HashMap::new())),
             });
 
+            app.manage(BrewOperationState {
+                manager: BrewOperationManager::new(),
+            });
+
             app.manage(AppsCacheState {
                 apps: Mutex::new(Vec::new()),
                 last_updated: Mutex::new(Instant::now() - Duration::from_secs(60)),
@@ -5363,7 +6394,18 @@ pub fn run() {
             run_terminal_command_inline,
             cancel_terminal_command,
             cancel_all_terminal_commands,
-            hide_main_window
+            hide_main_window,
+            brew_status,
+            brew_list,
+            brew_search,
+            brew_info,
+            brew_install,
+            brew_uninstall,
+            brew_upgrade,
+            brew_outdated,
+            brew_update,
+            brew_operation_status,
+            brew_operation_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

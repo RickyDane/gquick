@@ -1,6 +1,7 @@
 import { appLauncherPlugin } from "./appLauncher";
 import { calculatorPlugin } from "./calculator";
 import { dockerPlugin } from "./docker";
+import { homebrewPlugin } from "./homebrew";
 import { webSearchPlugin } from "./webSearch";
 import { fileSearchPlugin } from "./fileSearch";
 import { recentFilesPlugin } from "./recentFiles";
@@ -17,6 +18,7 @@ export const plugins: GQuickPlugin[] = [
   fileSearchPlugin,
   calculatorPlugin,
   dockerPlugin,
+  homebrewPlugin,
   webSearchPlugin,
   translatePlugin,
   notesPlugin,

@@ -69,7 +69,7 @@ Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `cre
 - Recent files: usage tracker records selections in `localStorage` with exponential decay scoring; `recentFilesPlugin` queries `getRecentItemsByPlugin("file-search", 5)` to surface recent files/folders above filesystem results.
 - Notes: quick capture/search/plugin tools/NotesView → Rust note commands → SQLite `notes` table.
 - Docker: `docker:` plugin and DockerView → Rust Docker commands → validated Docker CLI/Compose operations; Docker Hub search also available through frontend utility and Rust command.
-- Screenshot/OCR: global shortcut → selector window → `capture_region` → xcap crop/save → clipboard image or OCR text/event/base64 for AI vision.
+- Screenshot/OCR: global shortcut → selector window → `capture_region` → xcap crop/save to app data dir (`gquick_capture.png`) → clipboard image or OCR text/event/base64 for AI vision.
 
 ## Technology Stack
 
@@ -92,6 +92,8 @@ Current AI tools: `calculate`, `search_files`, `read_file`, `search_notes`, `cre
 Architecture documentation was validated and refreshed for overall functionality, plugin system, AI tool calling, and backend commands. See `arch/README.md` for documentation index. Saved location feature completed: users can configure a default location in Settings, and weather AI tools fall back to it when no location is specified.
 
 **Recent update:** Added `recentFilesPlugin` (immediate plugin, no debounce) that surfaces recently opened files/folders from usage history stored in `localStorage`. Results are deduplicated with debounced plugins and ranked with high score (200) to appear above filesystem scan results. `SearchSuggestions` now shows file-search entries in the unified "Recent" section alongside apps.
+
+**Recent update:** Screenshot capture (`gquick_capture.png`) now saves to the app data directory instead of Desktop. Actions panel cleaned up to show only one trigger per plugin (not all regex alternatives). Plugin keywords trimmed to only words that actually trigger the plugin. macOS app launcher now includes `/Applications/Utilities` and `/System/Applications/Utilities` to discover system utilities (Terminal, Activity Monitor, etc.).
 
 ## Key Decisions
 

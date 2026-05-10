@@ -416,7 +416,7 @@ export const speedtestPlugin: GQuickPlugin = {
     title: "Speedtest",
     subtitle: "Latency, download, and upload via Cloudflare",
     icon: Gauge,
-    keywords: ["speedtest", "speed test", "internet speed", "/st", "ping", "latency", "download", "upload"],
+    keywords: ["speedtest", "speed test", "internet speed", "/st"],
     queryPrefixes: [/^(speedtest|speed test|internet speed|\/st)$/i],
   },
   shouldSearch: isSpeedtestQuery,
@@ -561,4 +561,12 @@ function SpeedtestTitle() {
 function SpeedtestSubtitle() {
   const current = useSpeedtestSnapshot();
   return <>{current.phase} • {Math.round(current.progress)}% • Select to {current.running ? "view" : "start"}</>;
+}
+
+export function isSpeedtestRunning(): boolean {
+  return snapshot.running && controller !== null;
+}
+
+export function cancelSpeedtest(): void {
+  stopSpeedtest("Stopped by user.");
 }

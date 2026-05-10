@@ -70,6 +70,7 @@ interface BrewOperationStatus {
 interface HomebrewViewProps {
   searchQuery: string
   onSearchQueryChange?: (q: string) => void
+  initialPackage?: { name: string; isCask: boolean }
 }
 
 const detailPanelWidthKey = "homebrew-detail-panel-width"
@@ -139,7 +140,7 @@ function SkeletonRows({ count = 5 }: { count?: number }) {
   )
 }
 
-export function HomebrewView({ searchQuery, onSearchQueryChange }: HomebrewViewProps) {
+export function HomebrewView({ searchQuery, onSearchQueryChange, initialPackage }: HomebrewViewProps) {
   const [tab, setTab] = useState<Tab>("installed")
   const [status, setStatus] = useState<BrewStatus | null>(null)
   const [installed, setInstalled] = useState<BrewPackage[]>([])
@@ -160,6 +161,12 @@ export function HomebrewView({ searchQuery, onSearchQueryChange }: HomebrewViewP
   const refreshSeq = useRef(0)
   const mountedRef = useRef(false)
   const searchSeq = useRef(0)
+  const selectedRef = useRef<BrewInfo | null>(null)
+  const selectSeq = useRef(0)
+
+  useEffect(() => {
+    selectedRef.current = selected
+  }, [selected])
 
   const refresh = useCallback(async () => {
     const seq = ++refreshSeq.current
@@ -240,6 +247,19 @@ export function HomebrewView({ searchQuery, onSearchQueryChange }: HomebrewViewP
             setPendingAction(null)
             if (success) {
               refresh()
+              if (selectedRef.current && selectedRef.current.name) {
+                invoke<BrewInfo>("brew_info", { name: selectedRef.current.name })
+                  .then((info) => {
+                    if (mountedRef.current) {
+                      setSelected(info)
+                    }
+                  })
+                  .catch((err) => {
+                    if (mountedRef.current) {
+                      setOutput(shortError(err))
+                    }
+                  })
+              }
             }
           }
         }
@@ -330,6 +350,11 @@ export function HomebrewView({ searchQuery, onSearchQueryChange }: HomebrewViewP
   )
 
   const selectPackage = useCallback(async (name: string, isCask: boolean) => {
+    if (!name) {
+      console.warn("selectPackage called without name", { name, isCask })
+      return
+    }
+    const seq = ++selectSeq.current
     // Open panel instantly with minimal data
     setSelected({
       name,
@@ -345,17 +370,23 @@ export function HomebrewView({ searchQuery, onSearchQueryChange }: HomebrewViewP
     setIsPanelLoading(true)
     try {
       const info = await invoke<BrewInfo>("brew_info", { name })
-      if (mountedRef.current) {
+      if (mountedRef.current && selectSeq.current === seq) {
         setSelected(info)
         setIsPanelLoading(false)
       }
     } catch (err) {
-      if (mountedRef.current) {
+      if (mountedRef.current && selectSeq.current === seq) {
         setOutput(shortError(err))
         setIsPanelLoading(false)
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (initialPackage) {
+      void selectPackage(initialPackage.name, initialPackage.isCask)
+    }
+  }, [initialPackage, selectPackage])
 
   const startDetailPanelResize = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -868,7 +899,7 @@ function PackageRows({
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {item.actions.map((action) => {
-              const isPending = pendingAction === action.id
+              const isPending = pendingAction === `${action.id}-${item.title}`
               const icon = isPending ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : action.id === "install" ? (

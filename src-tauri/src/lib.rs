@@ -790,6 +790,7 @@ struct BrewOperationManager {
     output: Arc<Mutex<String>>,
     child: Arc<Mutex<Option<Child>>>,
     seq: Arc<Mutex<u64>>,
+    op_id: Arc<Mutex<u64>>,
 }
 
 impl BrewOperationManager {
@@ -800,10 +801,20 @@ impl BrewOperationManager {
             output: Arc::new(Mutex::new(String::new())),
             child: Arc::new(Mutex::new(None)),
             seq: Arc::new(Mutex::new(0)),
+            op_id: Arc::new(Mutex::new(0)),
         }
     }
 
-    fn start(&self, command: String) -> Result<(), String> {
+    fn next_op_id(&self) -> u64 {
+        if let Ok(mut op_id) = self.op_id.lock() {
+            *op_id += 1;
+            *op_id
+        } else {
+            0
+        }
+    }
+
+    fn start(&self, command: String) -> Result<u64, String> {
         let mut running = self.running.lock().map_err(|e| e.to_string())?;
         if *running {
             return Err("A Homebrew operation is already running.".into());
@@ -824,10 +835,17 @@ impl BrewOperationManager {
 
         let mut seq = self.seq.lock().map_err(|e| e.to_string())?;
         *seq = 0;
-        Ok(())
+
+        let op_id = self.next_op_id();
+        Ok(op_id)
     }
 
-    fn append_output(&self, chunk: &str) {
+    fn append_output(&self, op_id: u64, chunk: &str) {
+        if let Ok(current_op_id) = self.op_id.lock() {
+            if *current_op_id != op_id {
+                return;
+            }
+        }
         if let Ok(mut output) = self.output.lock() {
             output.push_str(chunk);
         }
@@ -842,7 +860,12 @@ impl BrewOperationManager {
         }
     }
 
-    fn finish(&self, _success: bool) {
+    fn finish(&self, op_id: u64, _success: bool) {
+        if let Ok(current_op_id) = self.op_id.lock() {
+            if *current_op_id != op_id {
+                return;
+            }
+        }
         if let Ok(mut running) = self.running.lock() {
             *running = false;
         }
@@ -865,12 +888,10 @@ impl BrewOperationManager {
     fn cancel(&self) -> Result<(), String> {
         let mut child = self.child.lock().map_err(|e| e.to_string())?;
         if let Some(mut c) = child.take() {
-            let _ = c.kill();
+            terminate_process_tree(&mut c);
             let _ = c.wait();
         }
-        if let Ok(mut running) = self.running.lock() {
-            *running = false;
-        }
+        // Do not clear running or advance op_id here; let the worker's finish() do it.
         Ok(())
     }
 }
@@ -4520,17 +4541,27 @@ fn run_brew_operation_in_background(
             "Homebrew is not installed or not on PATH.".into(),
         ));
     }
-    manager.start(command_label)?;
+    let op_id = manager.start(command_label)?;
 
     let manager = manager.clone();
     let app = app.clone();
 
     std::thread::spawn(move || {
-        let child = match Command::new("brew")
-            .args(&args)
+        let mut command = Command::new("brew");
+        command.args(&args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let child = match command.spawn()
         {
             Ok(child) => child,
             Err(e) => {
@@ -4544,7 +4575,7 @@ fn run_brew_operation_in_background(
                         success: false,
                     },
                 );
-                manager.finish(false);
+                manager.finish(op_id, false);
                 return;
             }
         };
@@ -4573,7 +4604,7 @@ fn run_brew_operation_in_background(
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         let chunk = format!("{}\n", line);
-                        manager_stdout.append_output(&chunk);
+                        manager_stdout.append_output(op_id, &chunk);
                         let seq = manager_stdout.next_seq();
                         let _ = app_stdout.emit(
                             "brew-operation-output",
@@ -4598,7 +4629,7 @@ fn run_brew_operation_in_background(
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         let chunk = format!("{}\n", line);
-                        manager_stderr.append_output(&chunk);
+                        manager_stderr.append_output(op_id, &chunk);
                         // Do not emit stderr to avoid duplicate lines;
                         // Homebrew often writes the same output to both stdout and stderr.
                     }
@@ -4650,7 +4681,7 @@ fn run_brew_operation_in_background(
             },
         );
 
-        manager.finish(success);
+        manager.finish(op_id, success);
     });
 
     Ok(())

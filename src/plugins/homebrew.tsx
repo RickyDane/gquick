@@ -30,11 +30,11 @@ function confirmRisk(message: string): boolean {
   return window.confirm(message)
 }
 
-function openHomebrew() {
-  window.dispatchEvent(new CustomEvent("gquick-open-homebrew"))
+function openHomebrew(opts?: { pkg?: { name: string; isCask: boolean }; searchTerm?: string }) {
+  window.dispatchEvent(new CustomEvent("gquick-open-homebrew", { detail: opts }))
 }
 
-function getOpenHomebrewItem(subtitle = "Manage Homebrew packages"): SearchResultItem {
+function getOpenHomebrewItem(subtitle = "Manage Homebrew packages", searchTerm?: string): SearchResultItem {
   return {
     id: "homebrew-open-page",
     pluginId: "homebrew",
@@ -42,7 +42,7 @@ function getOpenHomebrewItem(subtitle = "Manage Homebrew packages"): SearchResul
     subtitle,
     icon: Beer,
     score: 120,
-    onSelect: () => openHomebrew(),
+    onSelect: () => openHomebrew({ searchTerm }),
   }
 }
 
@@ -68,13 +68,16 @@ export const homebrewPlugin: GQuickPlugin = {
     const q = searchTerm.toLowerCase()
 
     if (!q) {
-      return [getOpenHomebrewItem("Type brew: <package> to search installed and remote packages.")]
+      return [getOpenHomebrewItem("Type brew: <package> to search installed and remote packages.", searchTerm)]
     }
 
-    const items: SearchResultItem[] = [getOpenHomebrewItem("Homebrew search results for brew: <package>")]
+    const items: SearchResultItem[] = []
+
+    let installedNames = new Set<string>()
 
     try {
       const installed = await invoke<BrewPackage[]>("brew_list")
+      installedNames = new Set(installed.map((p) => p.name.toLowerCase()))
       installed
         .filter((p) => p.name.toLowerCase().includes(q))
         .slice(0, 10)
@@ -102,7 +105,7 @@ export const homebrewPlugin: GQuickPlugin = {
               id: "info",
               label: "Info",
               onRun: () => {
-                void invoke("brew_info", { name: p.name })
+                openHomebrew({ pkg: { name: p.name, isCask: p.is_cask }, searchTerm })
               },
             },
             {
@@ -122,7 +125,7 @@ export const homebrewPlugin: GQuickPlugin = {
             title: p.name,
             subtitle: `${p.is_cask ? "Cask" : "Formula"}: ${p.version}${p.outdated ? ` • outdated${p.latest_version ? ` (${p.latest_version} available)` : ""}` : ""}`,
             icon: Beer,
-            onSelect: () => openHomebrew(),
+            onSelect: () => openHomebrew({ pkg: { name: p.name, isCask: p.is_cask }, searchTerm }),
             actions,
             score: p.outdated ? 105 : 100,
             renderPreview: () => <ActionRow actions={actions} />,
@@ -135,7 +138,7 @@ export const homebrewPlugin: GQuickPlugin = {
         title: "Homebrew unavailable",
         subtitle: "Open Homebrew page for status",
         icon: Beer,
-        onSelect: () => openHomebrew(),
+        onSelect: () => openHomebrew({ searchTerm }),
         score: 90,
       })
     }
@@ -143,45 +146,48 @@ export const homebrewPlugin: GQuickPlugin = {
     if (q.length >= 2) {
       try {
         const remote = await invoke<BrewSearchResult[]>("brew_search", { query: searchTerm })
-        remote.slice(0, 10).forEach((r) => {
-          const actions: NonNullable<SearchResultItem["actions"]> = [
-            {
-              id: "install",
-              label: "Install",
-              onRun: () => {
-                if (confirmRisk(`Install ${r.name}? This may take several minutes.`)) {
-                  void invoke("brew_install", { name: r.name, cask: r.is_cask })
-                }
+        remote
+          .filter((r) => !installedNames.has(r.name.toLowerCase()))
+          .slice(0, 10)
+          .forEach((r) => {
+            const actions: NonNullable<SearchResultItem["actions"]> = [
+              {
+                id: "install",
+                label: "Install",
+                onRun: () => {
+                  if (confirmRisk(`Install ${r.name}? This may take several minutes.`)) {
+                    void invoke("brew_install", { name: r.name, cask: r.is_cask })
+                  }
+                },
               },
-            },
-            {
-              id: "info",
-              label: "Info",
-              onRun: () => {
-                void invoke("brew_info", { name: r.name })
+              {
+                id: "info",
+                label: "Info",
+                onRun: () => {
+                  openHomebrew({ pkg: { name: r.name, isCask: r.is_cask }, searchTerm })
+                },
               },
-            },
-            {
-              id: "homepage",
-              label: "Open Homebrew Page",
-              onRun: () => {
-                void openUrl(`https://formulae.brew.sh/${r.is_cask ? "cask" : "formula"}/${r.name}`)
+              {
+                id: "homepage",
+                label: "Open Homebrew Page",
+                onRun: () => {
+                  void openUrl(`https://formulae.brew.sh/${r.is_cask ? "cask" : "formula"}/${r.name}`)
+                },
               },
-            },
-          ]
+            ]
 
-          items.push({
-            id: `brew-remote-${r.name}`,
-            pluginId: "homebrew",
-            title: r.name,
-            subtitle: `${r.is_cask ? "Cask" : "Formula"}${r.description ? ` • ${r.description}` : ""}`,
-            icon: Download,
-            onSelect: () => openHomebrew(),
-            actions,
-            score: 80,
-            renderPreview: () => <ActionRow actions={actions} />,
+            items.push({
+              id: `brew-remote-${r.name}`,
+              pluginId: "homebrew",
+              title: r.name,
+              subtitle: `${r.is_cask ? "Cask" : "Formula"}${r.description ? ` • ${r.description}` : ""}`,
+              icon: Download,
+              onSelect: () => openHomebrew({ pkg: { name: r.name, isCask: r.is_cask }, searchTerm }),
+              actions,
+              score: 80,
+              renderPreview: () => <ActionRow actions={actions} />,
+            })
           })
-        })
       } catch {
         items.push({
           id: "brew-search-error",
@@ -193,6 +199,10 @@ export const homebrewPlugin: GQuickPlugin = {
           score: 20,
         })
       }
+    }
+
+    if (items.length === 0) {
+      items.push(getOpenHomebrewItem("No results found for brew: <package>", searchTerm))
     }
 
     return items

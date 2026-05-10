@@ -64,7 +64,7 @@ Homebrew uses an **amber/orange** accent to differentiate from Docker's cyan.
 
 ## 4. Component Hierarchy
 
-```
+```text
 HomebrewView
 ├── HeaderBar
 │   ├── Title + Beer icon
@@ -369,7 +369,7 @@ The Homebrew view uses the same responsive strategy as Docker:
 - Action in progress: Button-level spinner, disabled state
 
 **Skeleton row styling:**
-```
+```text
 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5
 ├── pulse block (w-32 h-4 bg-white/5 rounded)  // name
 └── pulse block (w-48 h-3 bg-white/5 rounded mt-1.5) // subtitle
@@ -386,7 +386,7 @@ rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5
 | Network issue (API) | Amber banner | Retry |
 
 **Error banner component:**
-```
+```text
 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3
 flex items-center gap-2 text-xs text-amber-100
 Icon: AlertTriangle
@@ -399,7 +399,7 @@ Action: Retry button (text-xs, amber)
 ## 11. Confirmation Dialogs
 
 ### Uninstall Single Package
-```
+```text
 ┌─────────────────────────────────────────┐
 │  ⚠️  Uninstall <name>?                  │
 │                                         │
@@ -413,7 +413,7 @@ Action: Retry button (text-xs, amber)
 ```
 
 ### Upgrade All Packages
-```
+```text
 ┌─────────────────────────────────────────┐
 │  ⬆️  Upgrade N packages?                │
 │                                         │
@@ -439,7 +439,7 @@ Action: Retry button (text-xs, amber)
 
 Fixed at bottom of `HomebrewView`:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Homebrew 4.2.0  •  42 installed  •  3 outdated  •  Ready   │
 └─────────────────────────────────────────────────────────────┘

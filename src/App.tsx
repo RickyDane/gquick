@@ -292,6 +292,7 @@ function App() {
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
   const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
+  const [homebrewInitialPackage, setHomebrewInitialPackage] = useState<{ name: string; isCask: boolean } | null>(null);
   const [initialNoteId, setInitialNoteId] = useState<number | null>(null);
   const [notesSearchQuery, setNotesSearchQuery] = useState("");
   const [dockerSearchQuery, setDockerSearchQuery] = useState("");
@@ -478,7 +479,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handleOpenHomebrew = () => {
+    const handleOpenHomebrew = (event: Event) => {
+      const detail = (event as CustomEvent<{ pkg?: { name: string; isCask: boolean }; searchTerm?: string } | undefined>).detail;
+      setHomebrewInitialPackage(detail?.pkg ?? null);
+      if (detail?.searchTerm !== undefined) {
+        setHomebrewSearchQuery(detail.searchTerm);
+      }
       setView("homebrew");
     };
     window.addEventListener("gquick-open-homebrew", handleOpenHomebrew);
@@ -1954,7 +1960,7 @@ function App() {
           ) : view === "docker" ? (
             <DockerView initialImage={dockerInitialImage} searchQuery={dockerSearchQuery} onSearchQueryChange={setDockerSearchQuery} />
           ) : view === "homebrew" ? (
-            <HomebrewView searchQuery={homebrewSearchQuery} onSearchQueryChange={setHomebrewSearchQuery} />
+            <HomebrewView searchQuery={homebrewSearchQuery} onSearchQueryChange={setHomebrewSearchQuery} initialPackage={homebrewInitialPackage ?? undefined} />
           ) : view === "chat" ? (
             <div className={cn("flex flex-col", isExpandedView(view) ? "flex-1 overflow-hidden min-h-0" : "h-[300px]")}>
               <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
@@ -2155,15 +2161,11 @@ function App() {
                     );
                   })}
                 </div>
-              ) : isSearching || isTranslating ? (
-                <div className="p-6 text-center">
-                  <p className="text-sm text-zinc-500 italic font-medium">Waiting for results…</p>
-                </div>
-              ) : (
+              ) : !isSearching && !isTranslating ? (
                 <div className="p-6 text-center">
                   <p className="text-sm text-zinc-400 italic font-medium">No results found for "{query}"</p>
                 </div>
-              )}
+              ) : null}
               {isSearching && searchStatus && (
                 <div className="mt-2 flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
                   <Loader2 className="h-4 w-4 animate-spin" />

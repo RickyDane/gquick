@@ -21,6 +21,7 @@ import { getSavedLocation } from "./utils/location";
 import { recordUsage, getRecentItems } from "./utils/usageTracker";
 import { isSpeedtestRunning, cancelSpeedtest } from "./plugins/speedtest";
 import UpdateModal from "./components/UpdateModal";
+import { getLocaleInfo } from "./utils/locale";
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
@@ -1755,6 +1756,42 @@ function App() {
             }
           }}
           onKeyDown={(e) => {
+            if (e.code === "NumpadDecimal") {
+              const localeInfo = getLocaleInfo();
+              const locale = localeInfo.locale.toLowerCase();
+              const targetChar = locale.startsWith("en") ? "." : (locale.startsWith("de") ? "," : (localeInfo.decimalSeparator || "."));
+              
+              if (e.key !== targetChar) {
+                e.preventDefault();
+                const input = e.currentTarget as HTMLInputElement;
+                const start = input.selectionStart ?? 0;
+                const end = input.selectionEnd ?? 0;
+                const value = input.value;
+                const newValue = value.substring(0, start) + targetChar + value.substring(end);
+                
+                if (view === "chat") {
+                  setChatInput(newValue);
+                } else if (view === "notes") {
+                  setNotesSearchQuery(newValue);
+                } else if (view === "docker") {
+                  setDockerSearchQuery(newValue);
+                } else if (view === "homebrew") {
+                  setHomebrewSearchQuery(newValue);
+                } else {
+                  latestSearchQueryRef.current = newValue;
+                  searchRequestIdRef.current += 1;
+                  itemsRef.current = [];
+                  setQuery(newValue);
+                  setActiveIndex(0);
+                }
+                
+                setTimeout(() => {
+                  input.setSelectionRange(start + 1, start + 1);
+                }, 0);
+                return;
+              }
+            }
+
             if (view === "chat" && e.key === "Enter") handleSendMessage();
             else handleKeyDown(e);
           }}

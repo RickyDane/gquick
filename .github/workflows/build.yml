@@ -632,7 +632,7 @@ jobs:
       # ------------------------------------------------------------------
 
   publish-release:
-    if: github.event_name == 'push' && needs.prepare-release.outputs.should_publish_release == 'true' && needs.prepare-release.outputs.release_tag != ''
+    if: needs.prepare-release.outputs.should_publish_release == 'true' && needs.prepare-release.outputs.release_tag != ''
     needs:
       - prepare-release
       - build

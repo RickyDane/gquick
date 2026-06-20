@@ -9,23 +9,33 @@ export async function executeTool(
   name: string,
   args: Record<string, any>
 ): Promise<ToolResult> {
-  const plugin = plugins.find((p) => p.tools?.some((t) => t.name === name));
+  // Strip "functions." prefix if present
+  let cleanName = name.startsWith("functions.") ? name.substring(10) : name;
+  
+  // Map common/older aliases to clean tool names
+  if (cleanName === "query_network_info") {
+    cleanName = "get_network_info";
+  } else if (cleanName === "search_web") {
+    cleanName = "web_search";
+  }
+
+  const plugin = plugins.find((p) => p.tools?.some((t) => t.name === cleanName));
   if (!plugin || !plugin.executeTool) {
-    const error = `Tool "${name}" not found`;
+    const error = `Tool "${cleanName}" not found`;
     return { content: `Tool failed: ${error}`, success: false, error };
   }
   try {
-    const result = await plugin.executeTool(name, args);
+    const result = await plugin.executeTool(cleanName, args);
     if (!result.success && !result.content) {
       return {
         ...result,
-        content: `Tool "${name}" failed: ${result.error || "Unknown error"}`,
+        content: `Tool "${cleanName}" failed: ${result.error || "Unknown error"}`,
       };
     }
     return result;
   } catch (err: any) {
     const error = err.message || String(err);
-    return { content: `Tool "${name}" failed: ${error}`, success: false, error };
+    return { content: `Tool "${cleanName}" failed: ${error}`, success: false, error };
   }
 }
 
@@ -91,6 +101,8 @@ interface Message {
   images?: ChatImage[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  provider?: string;
+  model?: string;
 }
 
 export function convertMessagesToOpenAI(messages: Message[]): any[] {
@@ -179,7 +191,7 @@ export function convertMessagesToGemini(messages: Message[]): any[] {
         }
       }
       return {
-        role: "user",
+        role: "function",
         parts: [
           {
             functionResponse: {
@@ -193,9 +205,16 @@ export function convertMessagesToGemini(messages: Message[]): any[] {
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
       return {
         role: "model",
-        parts: m.toolCalls.map((tc) => ({
-          functionCall: { name: tc.name, args: tc.arguments },
-        })),
+        parts: m.toolCalls.map((tc) => {
+          const part: any = {
+            functionCall: { name: tc.name, args: tc.arguments },
+          };
+          const sig = tc.thought_signature || tc.thoughtSignature;
+          if (sig) {
+            part.thought_signature = sig;
+          }
+          return part;
+        }),
       };
     }
     return {

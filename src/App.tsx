@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, ChevronDown, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal, Plus, RefreshCw, Beer } from "lucide-react";
+import { Search, Command, Settings as SettingsIcon, MessageSquare, ChevronRight, ChevronDown, Send, User, Bot, Loader2, Zap, ImagePlus, X, RotateCcw, StickyNote, Box, Terminal, Plus, RefreshCw, Beer, Copy, Check } from "lucide-react";
 import { cn } from "./utils/cn";
 import { getPluginsForQuery, plugins } from "./plugins";
 import { SearchResultItem } from "./plugins/types";
@@ -8,6 +8,8 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { MarkdownMessage } from "./components/MarkdownMessage";
+import { ToolCallsView } from "./components/ToolCallsView";
+import { GroundingMetadataView } from "./components/GroundingMetadataView";
 import { Tooltip } from "./components/Tooltip";
 import { NotesView } from "./components/NotesView";
 import { DockerView, type DockerInitialImage } from "./components/DockerView";
@@ -21,6 +23,9 @@ import { getSavedLocation } from "./utils/location";
 import { recordUsage, getRecentItems } from "./utils/usageTracker";
 import { isSpeedtestRunning, cancelSpeedtest } from "./plugins/speedtest";
 import UpdateModal from "./components/UpdateModal";
+import geminiLogo from "./assets/gemini_logo.svg";
+import gptLogo from "./assets/gpt-logo.webp";
+
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const modKey = isMac ? '⌘' : 'Ctrl';
@@ -117,13 +122,16 @@ interface ChatImage {
   base64: string;
 }
 
-interface Message {
+export interface Message {
   id: string;
   role: "user" | "assistant" | "tool";
   content: string;
   images?: ChatImage[];
   toolCalls?: ToolCall[]; // for assistant messages that initiated tool calls
   toolCallId?: string; // for tool result messages
+  groundingMetadata?: any;
+  provider?: string;
+  model?: string;
 }
 
 interface InlineTerminalResult {
@@ -240,6 +248,18 @@ function isLikelyInteractiveCommand(command: string): boolean {
   return REPL_COMMANDS.has(executable) && tokens.length === index + 1;
 }
 
+const getModelLogo = (provider?: string, model?: string) => {
+  const normProvider = provider?.toLowerCase() || "";
+  const normModel = model?.toLowerCase() || "";
+  if (normProvider === "google" || normModel.includes("gemini")) {
+    return geminiLogo;
+  }
+  if (normProvider === "openai" || normModel.includes("gpt")) {
+    return gptLogo;
+  }
+  return null;
+};
+
 function App() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -283,13 +303,25 @@ function App() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem("selected-model") || "");
+  const [apiProvider, setApiProvider] = useState<string>(() => localStorage.getItem("api-provider") || "openai");
+  const getMessageLogo = (msg: Message) => {
+    return getModelLogo(msg.provider || apiProvider, msg.model || selectedModel);
+  };
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchStatus, setSearchStatus] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   const [inlineCommand, setInlineCommand] = useState<InlineCommandState | null>(null);
   const [attachedImages, setAttachedImages] = useState<ChatImage[]>([]);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const handleCopyMessage = (id: string, content: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedMessageId(id);
+    setTimeout(() => {
+      setCopiedMessageId(null);
+    }, 2000);
+  };
   const [notesContext, setNotesContext] = useState<{ title: string; content: string }[] | null>(null);
   const [dockerInitialImage, setDockerInitialImage] = useState<DockerInitialImage | null>(null);
   const [homebrewInitialPackage, setHomebrewInitialPackage] = useState<{ name: string; isCask: boolean } | null>(null);
@@ -345,6 +377,8 @@ function App() {
   useEffect(() => {
     const model = localStorage.getItem("selected-model");
     if (model) setSelectedModel(model);
+    const provider = localStorage.getItem("api-provider");
+    if (provider) setApiProvider(provider || "openai");
   }, [view]);
 
   // Sync saved shortcuts with Rust backend on mount
@@ -1510,24 +1544,89 @@ function App() {
       ? `The user's current location is ${savedLocation.name}${savedLocation.country ? `, ${savedLocation.country}` : ""} (lat: ${savedLocation.latitude}, lon: ${savedLocation.longitude}). Use this location by default for weather and location-related queries unless the user specifies a different location.`
       : "";
 
-    const baseSystemContent = "You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, network queries, and web search. Use them when helpful. Always format your responses using Markdown for better readability. Use code blocks for code, lists for enumerations, bold/italic for emphasis, and tables when appropriate." + (locationContext ? "\n\n" + locationContext : "");
+    const systemToolsContent =
+      "### Available Tools:\n" +
+      "You have access to the following tools. Always refer to them by their exact names and without any prefixes (like `functions.`):\n" +
+      "- `web_search`: Search the web for current information.\n" +
+      "- `search_files`: Search local files and folders by filename or keywords.\n" +
+      "- `read_file`: Access the content of local text files.\n" +
+      "- `search_notes`: Search your saved notes.\n" +
+      "- `create_note`: Save new information to your notes database.\n" +
+      "- `get_current_weather`: Get current weather conditions for a location.\n" +
+      "- `get_weather_forecast`: Get 7-day weather forecast for a location.\n" +
+      "- `calculate`: Perform mathematical calculations.\n" +
+      "- `get_network_info`: Get local network details (IP address, Wi-Fi SSID, latency).\n" +
+      "- `execute_python`: Write and execute Python code in a sandboxed/local environment.\n" +
+      "- `execute_sql`: Run SQL queries against a sandboxed SQLite database.\n\n" +
+      "If the user asks you what tools you have, what tools are available, or what you can do, you MUST reply with this exact markdown response:\n\n" +
+      "I have access to the following tools:\n\n" +
+      "**Information & Search**\n" +
+      "* `web_search`: Search the web for current information.\n" +
+      "* `search_files`: Search local files and folders by filename or keywords.\n" +
+      "* `search_notes`: Search your saved notes.\n\n" +
+      "**Utilities**\n" +
+      "* `get_current_weather`: Get current weather conditions for a location.\n" +
+      "* `get_weather_forecast`: Get 7-day weather forecast for a location.\n" +
+      "* `calculate`: Perform mathematical calculations.\n" +
+      "* `get_network_info`: Get local network details (IP address, Wi-Fi SSID, latency).\n\n" +
+      "**Data Management**\n" +
+      "* `read_file`: Access the content of local text files.\n" +
+      "* `create_note`: Save new information to your notes database.\n\n" +
+      "**Code Execution**\n" +
+      "* `execute_python`: Write and execute Python code in a sandboxed/local environment.\n" +
+      "* `execute_sql`: Run SQL queries against a sandboxed SQLite database.\n\n";
+
+    const baseSystemContent = 
+      "You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, search the web, and execute Python and SQL code. Use them when needed.\n\n" +
+      systemToolsContent +
+      "### Tool Usage Guidelines:\n" +
+      "- **Be Proactive**: Do not ask the user for clarification or confirmation before using search tools (like `search_files` or `search_notes`). If the user asks to find, search, list, or locate something, immediately call the appropriate search tool using the query inferred from their message.\n" +
+      "- **Query Inference**: If a search query is general (e.g., 'outgoing invoices' or 'Ausgangsrechnungen'), use it directly as the search query. Do not ask for exact filenames or folder paths.\n" +
+      "- **Location Context**: Only use the user's location for weather or explicitly location-based queries. Do not reference it for file searches, note searches, calculations, or other unrelated tasks.\n\n" +
+      "### Response Style & Guidelines:\n" +
+      "- **Format**: Always use clear **Markdown** (headers, bold text, code blocks, bullet points, tables).\n" +
+      "- **Conciseness**: Keep answers short, direct, and to the point. Omit fluff, greetings, and generic transitions.\n" +
+      "- **Visual Markers**: Do NOT use emojis or icons. Instead, use markdown-supported visual markers to emphasize important information:\n" +
+      "  - Use blockquotes (e.g., `> **Warning:** [message]` or `> **Note:** [message]`) to highlight critical alerts, warnings, or tips.\n" +
+      "  - Use bolding (`**text**`) or inline code (``code``) to draw attention to key parameters, files, or actions.\n" +
+      "  - Use bulleted lists and headers to structure key takeaways and summaries." +
+      (locationContext ? "\n\n" + locationContext : "");
+
     const systemContent = notesContextStr
-      ? `You are GQuick, a helpful AI assistant. You have access to tools that can help you perform actions like calculations, file searches, note management, network queries, and web search. Use them when helpful.\n\nThe user has shared their saved notes below. Use the notes to answer their question if relevant, but you can also draw on your general knowledge. If the notes contain the answer, reference them. If not, answer from your knowledge. Always format responses using Markdown.` + (locationContext ? "\n\n" + locationContext : "")
+      ? "You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, search the web, and execute Python and SQL code. Use them when needed.\n\n" +
+        "The user has shared their saved notes below. Use these notes to answer their question if relevant, referencing them when helpful. If not answered by the notes, answer using your general knowledge.\n\n" +
+        systemToolsContent +
+        "### Tool Usage Guidelines:\n" +
+        "- **Be Proactive**: Do not ask the user for clarification or confirmation before using search tools (like `search_files` or `search_notes`). If the user asks to find, search, list, or locate something, immediately call the appropriate search tool using the query inferred from their message.\n" +
+        "- **Query Inference**: If a search query is general (e.g., 'outgoing invoices' or 'Ausgangsrechnungen'), use it directly as the search query. Do not ask for exact filenames or folder paths.\n" +
+        "- **Location Context**: Only use the user's location for weather or explicitly location-based queries. Do not reference it for file searches, note searches, calculations, or other unrelated tasks.\n\n" +
+        "### Response Style & Guidelines:\n" +
+        "- **Format**: Always use clear **Markdown** (headers, bold text, code blocks, bullet points, tables).\n" +
+        "- **Conciseness**: Keep answers short, direct, and to the point. Omit fluff, greetings, and generic transitions.\n" +
+        "- **Visual Markers**: Do NOT use emojis or icons. Instead, use markdown-supported visual markers to emphasize important information:\n" +
+        "  - Use blockquotes (e.g., `> **Warning:** [message]` or `> **Note:** [message]`) to highlight critical alerts, warnings, or tips.\n" +
+        "  - Use bolding (`**text**`) or inline code (``code``) to draw attention to key parameters, files, or actions.\n" +
+        "  - Use bulleted lists and headers to structure key takeaways and summaries." +
+        (locationContext ? "\n\n" + locationContext : "")
       : baseSystemContent;
 
     async function streamWithTools(msgs: Message[], notesContext: string | null, depth = 0) {
       if (depth > 5) {
         const assistantId = (Date.now() + Math.random()).toString();
-        setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "Too many tool call rounds. Stopping to prevent infinite loop." }]);
+        setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "Too many tool call rounds. Stopping to prevent infinite loop.", provider, model }]);
         setIsLoading(false);
         return;
       }
 
       const assistantId = (Date.now() + Math.random()).toString();
-      setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "" }]);
+      setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "", provider, model }]);
 
       const updateAssistantContent = (text: string) => {
         setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: text } : m));
+      };
+
+      const updateAssistantGrounding = (metadata: any) => {
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, groundingMetadata: metadata } : m));
       };
 
       const history = msgs.filter(m => m.role !== "assistant" || m.id !== "1");
@@ -1554,6 +1653,7 @@ function App() {
 
       const callbacks = {
         onContent: updateAssistantContent,
+        onGrounding: updateAssistantGrounding,
         onDone: async (toolCalls?: ToolCall[]) => {
           try {
             if (toolCalls && toolCalls.length > 0) {
@@ -1574,7 +1674,7 @@ function App() {
               }));
 
               const afterToolMessages = [...msgs,
-                { id: assistantId, role: "assistant", content: "Using tools...", toolCalls: toolCalls } as Message,
+                { id: assistantId, role: "assistant", content: "Using tools...", toolCalls: toolCalls, provider, model } as Message,
                 ...toolResultMessages
               ];
               setMessages(afterToolMessages);
@@ -1640,14 +1740,23 @@ function App() {
             callbacks
           );
         } else if (provider === "google") {
+          const customTools = tools.filter(t => t.name !== "web_search");
+          const toolsArray: any[] = [];
+          if (customTools.length > 0) {
+            toolsArray.push(convertToolsForProvider(customTools, "google"));
+          }
+          toolsArray.push({ googleSearch: {} });
+
           const body: any = {
             systemInstruction: { role: "user", parts: [{ text: systemContent }] },
             contents: apiMessages,
+            tools: toolsArray,
           };
-          if (providerTools) {
-            body.tools = [providerTools];
-            body.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
-          }
+          body.toolConfig = {
+            functionCallingConfig: { mode: "AUTO" },
+            includeServerSideToolInvocations: true,
+            include_server_side_tool_invocations: true
+          };
           await streamGeminiTools(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
             { "Content-Type": "application/json" },
@@ -1731,7 +1840,13 @@ function App() {
         {view === "chat" && selectedModel && (
           <Tooltip content={selectedModel} className="mr-2">
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-[10px] text-blue-400 font-medium">
-              <Bot className="h-3 w-3" />
+              {(() => {
+                const logo = getModelLogo(apiProvider, selectedModel);
+                if (logo) {
+                  return <img src={logo} alt="" className={cn("h-3.5 w-3.5 object-contain", logo === gptLogo && "invert")} />;
+                }
+                return <Bot className="h-3 w-3" />;
+              })()}
             </div>
           </Tooltip>
         )}
@@ -1962,8 +2077,8 @@ function App() {
           ) : view === "homebrew" ? (
             <HomebrewView searchQuery={homebrewSearchQuery} onSearchQueryChange={setHomebrewSearchQuery} initialPackage={homebrewInitialPackage ?? undefined} />
           ) : view === "chat" ? (
-            <div className={cn("flex flex-col", isExpandedView(view) ? "flex-1 overflow-hidden min-h-0" : "h-[300px]")}>
-              <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6 relative">
+            <div className={cn("flex flex-col relative", isExpandedView(view) ? "flex-1 overflow-hidden min-h-0" : "h-[300px]")}>
+              <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-6">
                 {notesContext && (
                   <div className="flex flex-col gap-1.5 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/10">
                     <div className="flex items-center gap-1.5 text-[11px] text-amber-400 font-medium">
@@ -1979,25 +2094,52 @@ function App() {
                     </div>
                   </div>
                 )}
-                {messages.filter(msg => msg.role !== "tool").map(msg => (
-                  <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
+                {messages.filter(msg => msg.role !== "tool").map(msg => {
+                  const logoUrl = msg.role === "assistant" ? getMessageLogo(msg) : null;
+                  return (
+                    <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
+                      <div className={cn(
+                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0 border overflow-hidden",
+                        msg.role === "assistant"
+                          ? logoUrl
+                            ? "bg-zinc-950/40 border-white/10"
+                            : "bg-blue-500/20 border-blue-500/30 text-blue-400"
+                          : "bg-zinc-800 border-white/10 text-zinc-400"
+                      )}>
+                        {msg.role === "assistant" ? (
+                          logoUrl ? (
+                            <img src={logoUrl} alt="" className={cn("h-5 w-5 object-contain", logoUrl === gptLogo && "invert")} />
+                          ) : (
+                            "G"
+                          )
+                        ) : (
+                          <User className="h-4 w-4" />
+                        )}
+                      </div>
                     <div className={cn(
-                      "h-8 w-8 rounded-full flex items-center justify-center shrink-0 border",
-                      msg.role === "assistant" ? "bg-blue-500/20 border-blue-500/30 text-blue-400" : "bg-zinc-800 border-white/10 text-zinc-400"
-                    )}>
-                      {msg.role === "assistant" ? "G" : <User className="h-4 w-4" />}
-                    </div>
-                    <div className={cn(
-                      "rounded-2xl px-4 py-2 text-sm max-w-[85%] border break-words overflow-hidden",
-                      msg.role === "assistant" ? "bg-white/5 text-zinc-200 border-white/5" : "bg-blue-600/10 text-blue-100 border-blue-500/20"
+                      "rounded-2xl border break-words overflow-hidden relative group max-w-[85%] text-sm",
+                      msg.role === "assistant"
+                        ? msg.toolCalls && msg.toolCalls.length > 0
+                          ? "bg-white/5 border-white/5 p-1.5"
+                          : "bg-white/5 text-zinc-200 border-white/5 px-4 pr-10 py-2"
+                        : "bg-blue-600/10 text-blue-100 border-blue-500/20 px-4 pr-10 py-2"
                     )}>
                       {msg.role === "assistant" ? (
-                        msg.content ? (
-                          <MarkdownMessage content={msg.content} />
+                        msg.toolCalls && msg.toolCalls.length > 0 ? (
+                          <ToolCallsView msg={msg} messages={messages} />
                         ) : (
-                          <div className="flex items-center gap-2 text-zinc-400">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            <span>Thinking...</span>
+                          <div className="flex flex-col">
+                            {msg.content ? (
+                              <MarkdownMessage content={msg.content} />
+                            ) : (
+                              <div className="flex items-center gap-2 text-zinc-400">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                <span>Thinking...</span>
+                              </div>
+                            )}
+                            {msg.groundingMetadata && (
+                              <GroundingMetadataView metadata={msg.groundingMetadata} />
+                            )}
                           </div>
                         )
                       ) : (
@@ -2019,20 +2161,34 @@ function App() {
                           ))}
                         </div>
                       )}
-                    </div>
+                      {msg.content && !(msg.toolCalls && msg.toolCalls.length > 0) && (
+                        <button
+                          onClick={() => handleCopyMessage(msg.id, msg.content)}
+                          className="absolute top-2 right-2 p-1 rounded-md bg-zinc-800/80 border border-white/10 text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity hover:text-zinc-200 hover:bg-zinc-700/80 cursor-pointer"
+                          title="Copy message"
+                        >
+                          {copiedMessageId === msg.id ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      )}
                   </div>
-                ))}
+                </div>
+                  );
+                })}
                 <div ref={chatEndRef} />
-                {showScrollButton && (
-                  <button
-                    onClick={scrollToBottom}
-                    className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-blue-500/20 border border-blue-500/30 text-blue-400 hover:bg-blue-500/30 rounded-full p-1.5 backdrop-blur transition-colors cursor-pointer z-10"
-                    aria-label="Scroll to bottom"
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </button>
-                )}
               </div>
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-4 right-4 bg-blue-500/20 border border-blue-500/30 text-blue-400 hover:bg-blue-500/30 rounded-full p-1.5 backdrop-blur transition-colors cursor-pointer z-10"
+                  aria-label="Scroll to bottom"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              )}
             </div>
           ) : query ? (
             <div ref={searchListRef} className="max-h-[500px] overflow-y-auto p-2">

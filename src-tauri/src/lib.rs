@@ -542,6 +542,74 @@ mod tests {
 
         assert!(result.is_none());
     }
+
+    #[test]
+    fn read_ai_file_content_extracts_pdf_text() {
+        use lopdf::dictionary;
+
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("gquick-pdf-extract-test-{}", std::process::id()));
+        let target = base.join("document.pdf");
+
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Generate a minimal valid PDF using lopdf
+        let mut doc = lopdf::Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Courier",
+        });
+
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! { "F1" => font_id },
+        });
+
+        let content = lopdf::content::Content {
+            operations: vec![
+                lopdf::content::Operation::new("BT", vec![]),
+                lopdf::content::Operation::new("Tf", vec!["F1".into(), 12.into()]),
+                lopdf::content::Operation::new("Td", vec![100.into(), 500.into()]),
+                lopdf::content::Operation::new("Tj", vec![lopdf::Object::string_literal("Hello PDF!")]),
+                lopdf::content::Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(lopdf::Stream::new(dictionary! {}, content.encode().unwrap()));
+
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        });
+
+        doc.objects.insert(pages_id, lopdf::Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }));
+
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&target).unwrap();
+
+        let result = read_ai_file_content(&target, 100);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("Hello PDF!"));
+    }
 }
 
 #[tauri::command]
@@ -1458,12 +1526,30 @@ fn read_opened_text_content(mut file: std::fs::File, max_size: usize) -> Option<
 }
 
 fn read_ai_file_content(path: &std::path::Path, max_size: usize) -> Option<String> {
-    if !is_text_file(path) {
-        return None;
-    }
+    let extension = path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_lowercase());
+    if extension.as_deref() == Some("pdf") {
+        let (mut file, metadata) = open_ai_readable_file(path).ok()?;
+        if metadata.len() > 10_000_000 {
+            return Some("Error: PDF file is too large to extract text (limit is 10MB)".to_string());
+        }
 
-    let (file, _metadata) = open_ai_readable_file(path).ok()?;
-    read_opened_text_content(file, max_size)
+        let mut buffer = Vec::with_capacity(metadata.len() as usize);
+        use std::io::Read;
+        file.read_to_end(&mut buffer).ok()?;
+
+        let mut content = pdf_extract::extract_text_from_mem(&buffer).ok()?;
+        if truncate_string_to_byte_boundary(&mut content, max_size) {
+            content.push_str("\n... [file truncated, content too large] ...");
+        }
+        Some(content)
+    } else {
+        if !is_text_file(path) {
+            return None;
+        }
+
+        let (file, _metadata) = open_ai_readable_file(path).ok()?;
+        read_opened_text_content(file, max_size)
+    }
 }
 
 fn extract_meaningful_keywords(query: &str) -> Vec<String> {
@@ -3614,6 +3700,261 @@ fn delete_image_blocking(
     }
     args.push(id);
     docker_output(&args)
+}
+
+#[derive(serde::Serialize)]
+struct ExecuteResult {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+#[tauri::command]
+async fn execute_python(code: String) -> Result<ExecuteResult, String> {
+    run_blocking(move || execute_python_blocking(code)).await?
+}
+
+fn execute_python_blocking(code: String) -> Result<ExecuteResult, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let timeout = Duration::from_secs(15);
+    let docker_status = docker_status_blocking();
+
+    let mut cmd = if docker_status.cli_installed && docker_status.daemon_running {
+        let mut c = Command::new("docker");
+        c.args(["run", "--rm", "-i", "python:alpine", "python"]);
+        c
+    } else {
+        let python3_exists = Command::new("python3").arg("--version").output().is_ok();
+        if python3_exists {
+            Command::new("python3")
+        } else {
+            Command::new("python")
+        }
+    };
+
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn Python process: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(code.as_bytes())
+            .map_err(|e| format!("Failed to write Python code to stdin: {}", e))?;
+    }
+
+    let mut stdout_handle = child.stdout.take().map(read_pipe);
+    let mut stderr_handle = child.stderr.take().map(read_pipe);
+    let started = Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break status;
+            }
+            Ok(None) if started.elapsed() <= timeout => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                terminate_process_tree(&mut child);
+                let _ = child.wait();
+                if let Some(handle) = stdout_handle.take() {
+                    let _ = handle.join();
+                }
+                if let Some(handle) = stderr_handle.take() {
+                    let _ = handle.join();
+                }
+                return Ok(ExecuteResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "Execution timed out (limit: 15 seconds)".to_string(),
+                });
+            }
+        }
+    };
+
+    let stdout = match stdout_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "Failed to read stdout thread".to_string())?
+            .map_err(|e| format!("Stdout read error: {}", e))?,
+        None => String::new(),
+    };
+
+    let stderr = match stderr_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "Failed to read stderr thread".to_string())?
+            .map_err(|e| format!("Stderr read error: {}", e))?,
+        None => String::new(),
+    };
+
+    Ok(ExecuteResult {
+        success: status.success(),
+        stdout,
+        stderr,
+    })
+}
+
+#[tauri::command]
+async fn execute_sql(app: tauri::AppHandle, query: String) -> Result<ExecuteResult, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let db_path = app_data_dir.join("sandbox.db");
+    run_blocking(move || execute_sql_blocking(db_path, query)).await?
+}
+
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    let chars: Vec<char> = sql.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            current.push(c);
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            current.push(c);
+        } else if c == ';' && !in_single_quote && !in_double_quote {
+            statements.push(current.trim().to_string());
+            current.clear();
+        } else {
+            current.push(c);
+        }
+        i += 1;
+    }
+    let last = current.trim();
+    if !last.is_empty() {
+        statements.push(last.to_string());
+    }
+    statements
+}
+
+fn execute_sql_blocking(db_path: std::path::PathBuf, query: String) -> Result<ExecuteResult, String> {
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open sandbox database: {}", e))?;
+
+    let statements = split_sql_statements(&query);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut success = true;
+
+    for stmt in statements {
+        let trimmed = stmt.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let is_query = trimmed.to_uppercase().starts_with("SELECT")
+            || trimmed.to_uppercase().starts_with("PRAGMA")
+            || trimmed.to_uppercase().starts_with("WITH")
+            || trimmed.to_uppercase().starts_with("EXPLAIN");
+
+        if is_query {
+            match conn.prepare(trimmed) {
+                Ok(mut prepared) => {
+                    let col_count = prepared.column_count();
+                    let col_names: Vec<String> = prepared.column_names().into_iter().map(|s| s.to_string()).collect();
+
+                    let mut rows_out = Vec::new();
+                    match prepared.query_map([], |row| {
+                        let mut row_obj = serde_json::Map::new();
+                        for i in 0..col_count {
+                            let val: serde_json::Value = match row.get_ref(i) {
+                                Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
+                                Ok(rusqlite::types::ValueRef::Integer(val_int)) => serde_json::Value::Number(val_int.into()),
+                                Ok(rusqlite::types::ValueRef::Real(f)) => {
+                                    if let Some(n) = serde_json::Number::from_f64(f) {
+                                        serde_json::Value::Number(n)
+                                    } else {
+                                        serde_json::Value::Null
+                                    }
+                                }
+                                Ok(rusqlite::types::ValueRef::Text(t)) => {
+                                    serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                                }
+                                Ok(rusqlite::types::ValueRef::Blob(b)) => {
+                                    serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(b))
+                                }
+                                Err(_) => serde_json::Value::Null,
+                            };
+                            let col_name = col_names.get(i).cloned().unwrap_or_else(|| format!("col_{}", i));
+                            row_obj.insert(col_name, val);
+                        }
+                        Ok(serde_json::Value::Object(row_obj))
+                    }) {
+                        Ok(rows_iter) => {
+                            for r in rows_iter {
+                                match r {
+                                    Ok(row_val) => rows_out.push(row_val),
+                                    Err(e) => {
+                                        success = false;
+                                        stderr.push_str(&format!("Error fetching row: {}\n", e));
+                                    }
+                                }
+                            }
+                            if success {
+                                if let Ok(json_str) = serde_json::to_string_pretty(&rows_out) {
+                                    stdout.push_str(&json_str);
+                                    stdout.push('\n');
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            success = false;
+                            stderr.push_str(&format!("Query error: {}\n", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    success = false;
+                    stderr.push_str(&format!("Preparation error: {}\n", e));
+                }
+            }
+        } else {
+            match conn.execute(trimmed, []) {
+                Ok(changes) => {
+                    stdout.push_str(&format!("Statement executed successfully. Rows affected: {}\n", changes));
+                }
+                Err(e) => {
+                    success = false;
+                    stderr.push_str(&format!("Execution error for statement [{}]: {}\n", trimmed, e));
+                }
+            }
+        }
+
+        if !success {
+            break;
+        }
+    }
+
+    Ok(ExecuteResult {
+        success,
+        stdout,
+        stderr,
+    })
 }
 
 #[tauri::command]
@@ -6395,6 +6736,8 @@ pub fn run() {
             cancel_terminal_command,
             cancel_all_terminal_commands,
             hide_main_window,
+            execute_python,
+            execute_sql,
             brew_status,
             brew_list,
             brew_search,

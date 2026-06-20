@@ -12,6 +12,7 @@ export interface StreamToolCallbacks {
   onContent: (text: string) => void;
   onDone: (toolCalls?: ToolCall[]) => void;
   onError: (error: string) => void;
+  onGrounding?: (metadata: any) => void;
 }
 
 interface OpenAIUrlCitation {
@@ -145,9 +146,17 @@ export async function streamGemini(
       try {
         const parsed = JSON.parse(data);
         const parts = parsed.candidates?.[0]?.content?.parts;
-        if (parts && parts[0]?.text) {
-          content += parts[0].text;
-          callbacks.onContent(content);
+        if (parts) {
+          let hasText = false;
+          for (const part of parts) {
+            if (part.text) {
+              content += part.text;
+              hasText = true;
+            }
+          }
+          if (hasText) {
+            callbacks.onContent(content);
+          }
         }
       } catch {
         // ignore parse errors
@@ -400,18 +409,31 @@ export async function streamGeminiTools(
       const data = line.slice(6);
       try {
         const parsed = JSON.parse(data);
+        const groundingMetadata = parsed.candidates?.[0]?.groundingMetadata;
+        if (groundingMetadata && callbacks.onGrounding) {
+          callbacks.onGrounding(groundingMetadata);
+        }
         const parts = parsed.candidates?.[0]?.content?.parts;
-        if (parts && parts[0]?.text) {
-          content += parts[0].text;
-          callbacks.onContent(content);
+        if (parts) {
+          let hasText = false;
+          for (const part of parts) {
+            if (part.text) {
+              content += part.text;
+              hasText = true;
+            }
+          }
+          if (hasText) {
+            callbacks.onContent(content);
+          }
         }
         if (parts) {
           for (const part of parts) {
             if (part.functionCall) {
-              const newCall = {
+              const newCall: ToolCall = {
                 id: `gemini-${Date.now()}-${toolCalls.length}`,
                 name: part.functionCall.name,
                 arguments: part.functionCall.args || {},
+                thought_signature: part.thought_signature || part.thoughtSignature,
               };
               const isDuplicate = toolCalls.some(
                 tc => tc.name === newCall.name && JSON.stringify(tc.arguments) === JSON.stringify(newCall.arguments)

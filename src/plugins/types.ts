@@ -32,6 +32,8 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, any>;
+  thought_signature?: string;
+  thoughtSignature?: string;
 }
 
 export type QueryPrefixMatcher = string | RegExp;

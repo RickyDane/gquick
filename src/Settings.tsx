@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle, MapPin, X, Download, RefreshCw } from "lucide-react";
+import { Key, Eye, EyeOff, Loader2, Command, Save, Power, AlertTriangle, MapPin, X, Download, RefreshCw, Zap } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import ShortcutRecorder from "./components/ShortcutRecorder";
 import { getSavedLocation, saveLocation, clearSavedLocation, SavedLocation, searchLocations } from "./utils/location";
 import UpdateModal from "./components/UpdateModal";
+import { plugins } from "./plugins";
 
 interface Model {
   id: string;
@@ -48,6 +49,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const quitButtonRef = useRef<HTMLButtonElement>(null);
   const cancelQuitRef = useRef<HTMLButtonElement>(null);
   const confirmQuitRef = useRef<HTMLButtonElement>(null);
+  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({});
 
   // Location state
   const [savedLocation, setSavedLocation] = useState<SavedLocation | null>(null);
@@ -115,6 +117,23 @@ export default function Settings({ onClose }: { onClose: () => void }) {
 
     // Load saved location
     setSavedLocation(getSavedLocation());
+
+    // Load enabled tools state
+    const toolsState: Record<string, boolean> = {};
+    for (const plugin of plugins) {
+      if (plugin.tools) {
+        for (const tool of plugin.tools) {
+          const saved = localStorage.getItem(`tool-enabled-${tool.name}`);
+          if (saved === null) {
+            const isDefaultDisabled = tool.name === "execute_python" || tool.name === "execute_sql";
+            toolsState[tool.name] = !isDefaultDisabled;
+          } else {
+            toolsState[tool.name] = saved === "true";
+          }
+        }
+      }
+    }
+    setEnabledTools(toolsState);
   }, []);
 
   // Fetch models when provider or api key changes
@@ -270,10 +289,23 @@ export default function Settings({ onClose }: { onClose: () => void }) {
     setLocationQuery("");
   };
 
+  const handleToggleTool = (toolName: string) => {
+    setEnabledTools((prev) => ({
+      ...prev,
+      [toolName]: !prev[toolName],
+    }));
+  };
+
   const saveSettings = () => {
     localStorage.setItem("api-key", apiKey);
     localStorage.setItem("api-provider", apiProvider);
     if (selectedModel) localStorage.setItem("selected-model", selectedModel);
+
+    // Save tools state
+    Object.entries(enabledTools).forEach(([toolName, isEnabled]) => {
+      localStorage.setItem(`tool-enabled-${toolName}`, isEnabled ? "true" : "false");
+    });
+
     onClose();
   };
 
@@ -573,6 +605,70 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Tools Configuration */}
+        <div className="space-y-4 p-4 bg-white/5 border border-white/10 rounded-xl">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <Zap className="h-4 w-4 text-zinc-400" />
+              AI Chat Tools
+            </label>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-[11px] text-blue-100/90">
+            <p>Enable or disable tools the AI assistant can use. Disabled tools will not be accessible to the AI models during chat.</p>
+          </div>
+
+          <div className="divide-y divide-white/5 pt-1">
+            {plugins
+              .filter((p) => p.tools && p.tools.length > 0)
+              .map((plugin) => (
+                <div key={plugin.metadata.id} className="py-3.5 first:pt-0 last:pb-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <plugin.metadata.icon className="h-4 w-4 text-zinc-400" />
+                    <span className="text-xs font-semibold text-zinc-300">{plugin.metadata.title}</span>
+                  </div>
+                  <div className="space-y-2.5 pl-6">
+                    {plugin.tools?.map((tool) => {
+                      const isEnabled =
+                        enabledTools[tool.name] ??
+                        (tool.name !== "execute_python" && tool.name !== "execute_sql");
+                      return (
+                        <div key={tool.name} className="flex items-start justify-between gap-4">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-xs font-medium text-zinc-200">
+                              <code>{tool.name}</code>
+                            </span>
+                            <p className="text-[11px] text-zinc-400 leading-normal mt-0.5">
+                              {tool.description}
+                            </p>
+                            {tool.name === "execute_python" && (
+                              <p className="text-[10px] text-amber-400/85 leading-normal mt-1 bg-amber-500/5 border border-amber-500/10 rounded px-2 py-1 select-none">
+                                Note: Uses a Docker container as a sandbox if Docker is installed, otherwise falls back to your local Python installation.
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleTool(tool.name)}
+                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
+                              isEnabled ? "bg-blue-600" : "bg-zinc-700"
+                            }`}
+                          >
+                            <span
+                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                isEnabled ? "translate-x-4" : "translate-x-0"
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
           </div>
         </div>
 

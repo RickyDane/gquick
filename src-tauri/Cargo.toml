@@ -1,6 +1,6 @@
 [package]
 name = "gquick"
-version = "0.1.9"
+version = "0.2.0"
 description = "A simple, fast and feature rich launcher"
 authors = ["Ricky Dane Perlick"]
 edition = "2021"
@@ -40,6 +40,9 @@ scraper = "0.22"
 libc = "0.2"
 unicode-normalization = "0.1"
 walkdir = "2"
+pdf-extract = "0.10"
+lopdf = "0.38"
+tokio = { version = "1", features = ["full"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tesseract = "0.15"

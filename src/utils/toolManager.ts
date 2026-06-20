@@ -2,7 +2,15 @@ import { plugins } from "../plugins";
 import { PluginTool, ToolResult, ToolCall } from "../plugins/types";
 
 export function getAllTools(): PluginTool[] {
-  return plugins.flatMap((p) => p.tools ?? []);
+  const all = plugins.flatMap((p) => p.tools ?? []);
+  return all.filter((t) => {
+    const isDefaultDisabled = t.name === "execute_python" || t.name === "execute_sql";
+    const saved = localStorage.getItem(`tool-enabled-${t.name}`);
+    if (saved === null) {
+      return !isDefaultDisabled;
+    }
+    return saved === "true";
+  });
 }
 
 export async function executeTool(
@@ -24,6 +32,16 @@ export async function executeTool(
     const error = `Tool "${cleanName}" not found`;
     return { content: `Tool failed: ${error}`, success: false, error };
   }
+
+  // Safety check: verify the tool is actually enabled
+  const isDefaultDisabled = cleanName === "execute_python" || cleanName === "execute_sql";
+  const saved = localStorage.getItem(`tool-enabled-${cleanName}`);
+  const isEnabled = saved === null ? !isDefaultDisabled : saved === "true";
+  if (!isEnabled) {
+    const error = `Tool "${cleanName}" is disabled in settings`;
+    return { content: `Tool failed: ${error}`, success: false, error };
+  }
+
   try {
     const result = await plugin.executeTool(cleanName, args);
     if (!result.success && !result.content) {

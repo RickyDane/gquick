@@ -1544,40 +1544,84 @@ function App() {
       ? `The user's current location is ${savedLocation.name}${savedLocation.country ? `, ${savedLocation.country}` : ""} (lat: ${savedLocation.latitude}, lon: ${savedLocation.longitude}). Use this location by default for weather and location-related queries unless the user specifies a different location.`
       : "";
 
+    const enabledToolNames = new Set(tools.map(t => t.name));
+    
+    const toolsDescriptionMap: Record<string, string> = {
+      web_search: "Search the web for current information.",
+      search_files: "Search local files and folders by filename or keywords.",
+      read_file: "Access the content of local text files.",
+      search_notes: "Search your saved notes.",
+      create_note: "Save new information to your notes database.",
+      get_current_weather: "Get current weather conditions for a location.",
+      get_weather_forecast: "Get 7-day weather forecast for a location.",
+      calculate: "Perform mathematical calculations.",
+      get_network_info: "Get local network details (IP address, Wi-Fi SSID, latency).",
+      execute_python: "Write and execute Python code in a sandboxed/local environment.",
+      execute_sql: "Run SQL queries against a sandboxed SQLite database."
+    };
+
+    const availableToolsList = tools
+      .map(t => `- \`${t.name}\`: ${toolsDescriptionMap[t.name] || t.description}`)
+      .join("\n");
+
+    const infoSearchSection = [
+      enabledToolNames.has("web_search") && "* `web_search`: Search the web for current information.",
+      enabledToolNames.has("search_files") && "* `search_files`: Search local files and folders by filename or keywords.",
+      enabledToolNames.has("search_notes") && "* `search_notes`: Search your saved notes."
+    ].filter((val): val is string => typeof val === "string").join("\n");
+
+    const utilitiesSection = [
+      enabledToolNames.has("get_current_weather") && "* `get_current_weather`: Get current weather conditions for a location.",
+      enabledToolNames.has("get_weather_forecast") && "* `get_weather_forecast`: Get 7-day weather forecast for a location.",
+      enabledToolNames.has("calculate") && "* `calculate`: Perform mathematical calculations.",
+      enabledToolNames.has("get_network_info") && "* `get_network_info`: Get local network details (IP address, Wi-Fi SSID, latency)."
+    ].filter((val): val is string => typeof val === "string").join("\n");
+
+    const dataMgmtSection = [
+      enabledToolNames.has("read_file") && "* `read_file`: Access the content of local text files.",
+      enabledToolNames.has("create_note") && "* `create_note`: Save new information to your notes database."
+    ].filter((val): val is string => typeof val === "string").join("\n");
+
+    const codeExecSection = [
+      enabledToolNames.has("execute_python") && "* `execute_python`: Write and execute Python code in a sandboxed/local environment.",
+      enabledToolNames.has("execute_sql") && "* `execute_sql`: Run SQL queries against a sandboxed SQLite database."
+    ].filter((val): val is string => typeof val === "string").join("\n");
+
+    let exactResponse = "I have access to the following tools:\n\n";
+    if (infoSearchSection) {
+      exactResponse += "**Information & Search**\n" + infoSearchSection + "\n\n";
+    }
+    if (utilitiesSection) {
+      exactResponse += "**Utilities**\n" + utilitiesSection + "\n\n";
+    }
+    if (dataMgmtSection) {
+      exactResponse += "**Data Management**\n" + dataMgmtSection + "\n\n";
+    }
+    if (codeExecSection) {
+      exactResponse += "**Code Execution**\n" + codeExecSection + "\n\n";
+    }
+
     const systemToolsContent =
       "### Available Tools:\n" +
       "You have access to the following tools. Always refer to them by their exact names and without any prefixes (like `functions.`):\n" +
-      "- `web_search`: Search the web for current information.\n" +
-      "- `search_files`: Search local files and folders by filename or keywords.\n" +
-      "- `read_file`: Access the content of local text files.\n" +
-      "- `search_notes`: Search your saved notes.\n" +
-      "- `create_note`: Save new information to your notes database.\n" +
-      "- `get_current_weather`: Get current weather conditions for a location.\n" +
-      "- `get_weather_forecast`: Get 7-day weather forecast for a location.\n" +
-      "- `calculate`: Perform mathematical calculations.\n" +
-      "- `get_network_info`: Get local network details (IP address, Wi-Fi SSID, latency).\n" +
-      "- `execute_python`: Write and execute Python code in a sandboxed/local environment.\n" +
-      "- `execute_sql`: Run SQL queries against a sandboxed SQLite database.\n\n" +
+      availableToolsList + "\n\n" +
       "If the user asks you what tools you have, what tools are available, or what you can do, you MUST reply with this exact markdown response:\n\n" +
-      "I have access to the following tools:\n\n" +
-      "**Information & Search**\n" +
-      "* `web_search`: Search the web for current information.\n" +
-      "* `search_files`: Search local files and folders by filename or keywords.\n" +
-      "* `search_notes`: Search your saved notes.\n\n" +
-      "**Utilities**\n" +
-      "* `get_current_weather`: Get current weather conditions for a location.\n" +
-      "* `get_weather_forecast`: Get 7-day weather forecast for a location.\n" +
-      "* `calculate`: Perform mathematical calculations.\n" +
-      "* `get_network_info`: Get local network details (IP address, Wi-Fi SSID, latency).\n\n" +
-      "**Data Management**\n" +
-      "* `read_file`: Access the content of local text files.\n" +
-      "* `create_note`: Save new information to your notes database.\n\n" +
-      "**Code Execution**\n" +
-      "* `execute_python`: Write and execute Python code in a sandboxed/local environment.\n" +
-      "* `execute_sql`: Run SQL queries against a sandboxed SQLite database.\n\n";
+      exactResponse;
+
+    const hasPython = enabledToolNames.has("execute_python");
+    const hasSql = enabledToolNames.has("execute_sql");
+    let executionCapabilities = "";
+    if (hasPython && hasSql) {
+      executionCapabilities = ", and execute Python and SQL code";
+    } else if (hasPython) {
+      executionCapabilities = ", and execute Python code";
+    } else if (hasSql) {
+      executionCapabilities = ", and execute SQL queries";
+    }
+    const introText = `You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, and search the web${executionCapabilities}. Use them when needed.\n\n`;
 
     const baseSystemContent = 
-      "You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, search the web, and execute Python and SQL code. Use them when needed.\n\n" +
+      introText +
       systemToolsContent +
       "### Tool Usage Guidelines:\n" +
       "- **Be Proactive**: Do not ask the user for clarification or confirmation before using search tools (like `search_files` or `search_notes`). If the user asks to find, search, list, or locate something, immediately call the appropriate search tool using the query inferred from their message.\n" +
@@ -1593,7 +1637,7 @@ function App() {
       (locationContext ? "\n\n" + locationContext : "");
 
     const systemContent = notesContextStr
-      ? "You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, search the web, and execute Python and SQL code. Use them when needed.\n\n" +
+      ? `You are GQuick, a highly efficient, helpful, and concise AI assistant. You have access to tools to help perform calculations, search files, manage notes, query network info, and search the web${executionCapabilities}. Use them when needed.\n\n` +
         "The user has shared their saved notes below. Use these notes to answer their question if relevant, referencing them when helpful. If not answered by the notes, answer using your general knowledge.\n\n" +
         systemToolsContent +
         "### Tool Usage Guidelines:\n" +

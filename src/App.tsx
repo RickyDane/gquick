@@ -333,6 +333,7 @@ function App() {
   const [autoCheckUpdateInfo, setAutoCheckUpdateInfo] = useState<{ version: string; body: string | null } | null>(null);
   const [autoCheckUpdateObj, setAutoCheckUpdateObj] = useState<any>(null);
   const appliedWindowModeRef = useRef<"launcher" | "expanded" | null>(null);
+  const shouldCenterOnNextResizeRef = useRef(false);
   const inlineCommandRef = useRef<InlineCommandState | null>(null);
   const searchRequestIdRef = useRef(0);
   const latestSearchQueryRef = useRef(query);
@@ -547,13 +548,17 @@ function App() {
           ? appliedLauncherHeightRef.current
           : size.height;
         await appWindow.setSize(new LogicalSize(size.width, launcherHeight));
-        await appWindow.center();
+        await invoke("center_main_window");
       } catch (error) {
         console.error("Failed to resize window:", error);
       }
     };
 
     void resizeWindow();
+  }, [view]);
+
+  useEffect(() => {
+    shouldCenterOnNextResizeRef.current = true;
   }, [view]);
 
   useEffect(() => {
@@ -581,11 +586,22 @@ function App() {
 
       const targetHeight = pendingLauncherHeightRef.current;
       if (targetHeight == null) return;
-      if (targetHeight === appliedLauncherHeightRef.current) return;
+
+      const sizeChanged = targetHeight !== appliedLauncherHeightRef.current;
+      const shouldCenter = shouldCenterOnNextResizeRef.current;
+
+      if (!sizeChanged && !shouldCenter) return;
 
       try {
-        await getCurrentWindow().setSize(new LogicalSize(LAUNCHER_WINDOW_SIZE.width, targetHeight));
-        appliedLauncherHeightRef.current = targetHeight;
+        const appWindow = getCurrentWindow();
+        if (sizeChanged) {
+          await appWindow.setSize(new LogicalSize(LAUNCHER_WINDOW_SIZE.width, targetHeight));
+          appliedLauncherHeightRef.current = targetHeight;
+        }
+        if (shouldCenter) {
+          await invoke("center_main_window");
+          shouldCenterOnNextResizeRef.current = false;
+        }
       } catch (error) {
         console.error("Failed to resize launcher window:", error);
       }
@@ -1552,6 +1568,7 @@ function App() {
       read_file: "Access the content of local text files.",
       search_notes: "Search your saved notes.",
       create_note: "Save new information to your notes database.",
+      update_note: "Update an existing note in your notes database.",
       get_current_weather: "Get current weather conditions for a location.",
       get_weather_forecast: "Get 7-day weather forecast for a location.",
       calculate: "Perform mathematical calculations.",
@@ -1579,7 +1596,8 @@ function App() {
 
     const dataMgmtSection = [
       enabledToolNames.has("read_file") && "* `read_file`: Access the content of local text files.",
-      enabledToolNames.has("create_note") && "* `create_note`: Save new information to your notes database."
+      enabledToolNames.has("create_note") && "* `create_note`: Save new information to your notes database.",
+      enabledToolNames.has("update_note") && "* `update_note`: Update an existing note in your notes database."
     ].filter((val): val is string => typeof val === "string").join("\n");
 
     const codeExecSection = [

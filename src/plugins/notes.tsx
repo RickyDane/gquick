@@ -55,6 +55,19 @@ export const notesPlugin: GQuickPlugin = {
         required: ["title", "content"],
       },
     },
+    {
+      name: "update_note",
+      description: "Update an existing note in the database with a new title and content.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "number", description: "The ID of the note to update" },
+          title: { type: "string", description: "The updated title of the note" },
+          content: { type: "string", description: "The updated content/body of the note" },
+        },
+        required: ["id", "title", "content"],
+      },
+    },
   ],
   executeTool: async (name: string, args: Record<string, any>): Promise<ToolResult> => {
     if (name === "search_notes") {
@@ -69,6 +82,15 @@ export const notesPlugin: GQuickPlugin = {
       try {
         await invoke("create_note", { title: args.title, content: args.content });
         return { content: `Note "${args.title}" created successfully.`, success: true };
+      } catch (err: any) {
+        return { content: "", success: false, error: err.message || String(err) };
+      }
+    }
+    if (name === "update_note") {
+      try {
+        await invoke("update_note", { id: args.id, title: args.title, content: args.content });
+        window.dispatchEvent(new CustomEvent("gquick-note-saved"));
+        return { content: `Note "${args.title}" (ID: ${args.id}) updated successfully.`, success: true };
       } catch (err: any) {
         return { content: "", success: false, error: err.message || String(err) };
       }

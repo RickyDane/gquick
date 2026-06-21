@@ -47,6 +47,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
   const [loading, setLoading] = useState(true);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [copiedId, setCopiedId] = useState<number | null>(null);
@@ -57,11 +58,12 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
     hasHandledInitialNote.current = false;
   }, [initialNoteId]);
 
-  const startEdit = useCallback((note: Note) => {
+  const startEdit = useCallback((note: Note, editDirectly = false) => {
     setEditingNote(note);
     setEditTitle(note.title);
     setEditContent(note.content);
     setIsCreating(false);
+    setIsEditMode(editDirectly);
   }, []);
 
   const fetchNotes = useCallback(async () => {
@@ -73,7 +75,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
       if (initialNoteId && !hasHandledInitialNote.current && !isCreating && !editingNote) {
         const targetNote = data.find((n) => n.id === initialNoteId);
         if (targetNote) {
-          startEdit(targetNote);
+          startEdit(targetNote, false);
         }
         hasHandledInitialNote.current = true;
       }
@@ -124,6 +126,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
       setIsCreating(false);
       setEditTitle("");
       setEditContent("");
+      setIsEditMode(false);
       fetchNotes();
     } catch (e) {
       console.error("Failed to save note:", e);
@@ -161,6 +164,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
     setEditingNote(null);
     setEditTitle("");
     setEditContent("");
+    setIsEditMode(true);
   };
 
   const cancelEdit = () => {
@@ -168,6 +172,7 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
     setIsCreating(false);
     setEditTitle("");
     setEditContent("");
+    setIsEditMode(false);
   };
 
   const filteredNotes = searchQuery.trim()
@@ -178,28 +183,87 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
       )
     : notes;
 
-  const isEditing = isCreating || editingNote !== null;
+  const isDetailActive = isCreating || editingNote !== null;
 
   return (
-    <div className={cn("flex flex-col min-w-[500px]", isEditing ? "h-auto" : "h-[300px]")}>
+    <div className={cn("flex flex-col min-w-[500px]", isDetailActive ? "h-auto" : "h-[300px]")}>
       <div className="flex-1 overflow-y-auto">
-        {isEditing ? (
-          <div className="p-4 space-y-3">
-            <input
-              type="text"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              placeholder="Note title (optional)"
-              className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all"
-            />
-            <textarea
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              placeholder="Write your note in Markdown..."
-              rows={10}
-              className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all resize-none"
-            />
-            <div className="flex items-center justify-end gap-2">
+        {isDetailActive ? (
+          <div className="p-4 space-y-3 flex flex-col h-full">
+            {/* Header with Title and Mode Toggle */}
+            <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-2">
+              <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">
+                {editingNote ? "Note Detail" : "New Note"}
+              </span>
+              <div className="flex bg-zinc-950 p-0.5 rounded-lg border border-white/5">
+                <button
+                  type="button"
+                  onClick={() => setIsEditMode(false)}
+                  className={cn(
+                    "px-3 py-1 text-xs font-medium rounded-md transition-all cursor-pointer",
+                    !isEditMode
+                      ? "bg-zinc-800 text-zinc-100 shadow-sm"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditMode(true)}
+                  className={cn(
+                    "px-3 py-1 text-xs font-medium rounded-md transition-all cursor-pointer",
+                    isEditMode
+                      ? "bg-zinc-800 text-zinc-100 shadow-sm"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  Edit
+                </button>
+              </div>
+            </div>
+
+            {!isEditMode ? (
+              /* Preview Mode */
+              <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-4 min-h-[220px] max-h-[350px] overflow-y-auto space-y-3 select-text custom-scrollbar">
+                {editTitle.trim() ? (
+                  <h2 className="text-base font-semibold text-zinc-100 border-b border-white/5 pb-2">
+                    {editTitle}
+                  </h2>
+                ) : (
+                  <h2 className="text-base font-semibold italic text-zinc-500 border-b border-white/5 pb-2">
+                    Untitled Note
+                  </h2>
+                )}
+                <div className="text-sm text-zinc-300 leading-relaxed break-words">
+                  {editContent.trim() ? (
+                    <MarkdownMessage content={editContent} />
+                  ) : (
+                    <p className="italic text-zinc-500 text-xs">No content yet. Click "Edit" to add some.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Edit Mode */
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="Note title (optional)"
+                  className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all"
+                />
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  placeholder="Write your note in Markdown..."
+                  rows={10}
+                  className="w-full bg-zinc-800 border border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 outline-none focus:border-blue-500/50 transition-all resize-none"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
               <button
                 onClick={cancelEdit}
                 className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-colors border border-white/10 cursor-pointer"
@@ -242,7 +306,8 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
             {filteredNotes.map((note) => (
               <div
                 key={note.id}
-                className="group flex flex-col gap-1.5 p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 hover:border-white/10 transition-all"
+                onClick={() => startEdit(note, false)}
+                className="group flex flex-col gap-1.5 p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 hover:border-white/10 transition-all cursor-pointer"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
@@ -252,7 +317,10 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                     <button
-                      onClick={() => handleCopy(note)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCopy(note);
+                      }}
                       className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
                       title="Copy content"
                     >
@@ -263,14 +331,20 @@ export function NotesView({ initialNoteId, searchQuery = "" }: NotesViewProps) {
                       )}
                     </button>
                     <button
-                      onClick={() => startEdit(note)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(note, true);
+                      }}
                       className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
                       title="Edit note"
                     >
                       <Edit2 className="h-3.5 w-3.5" />
                     </button>
                     <button
-                      onClick={() => handleDelete(note.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(note.id);
+                      }}
                       className="p-1.5 hover:bg-red-500/10 rounded-lg text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
                       title="Delete note"
                     >

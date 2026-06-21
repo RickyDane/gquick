@@ -74,6 +74,13 @@ function getToolDetails(name: string, args: Record<string, any>, isCompleted: bo
         ? `Created note "${args.title || ""}"`
         : `Creating note "${args.title || ""}"...`;
       break;
+    case "update_note":
+      Icon = StickyNote;
+      label = "Update Note";
+      description = isCompleted
+        ? `Updated note "${args.title || ""}"`
+        : `Updating note "${args.title || ""}"...`;
+      break;
     case "get_current_weather":
       Icon = Cloud;
       label = "Current Weather";

@@ -3540,6 +3540,30 @@ fn hide_main_window(window: tauri::Window) -> Result<(), String> {
     hide_window(&window, true)
 }
 
+#[tauri::command]
+fn center_main_window(window: tauri::Window) -> Result<(), String> {
+    let app = window.app_handle();
+    if let Some(monitor) = monitor_for_mouse(app).or_else(|| app.primary_monitor().ok().flatten()) {
+        let scale_factor = monitor.scale_factor();
+        let (logical_monitor_pos, logical_monitor_size) =
+            monitor_to_logical_geometry(&monitor);
+
+        let window_size = window.inner_size().unwrap_or(tauri::PhysicalSize {
+            width: 760,
+            height: 800,
+        });
+        let logical_window_size = window_size.to_logical::<f64>(scale_factor);
+
+        let x = logical_monitor_pos.x
+            + (logical_monitor_size.width - logical_window_size.width) / 2.0;
+        let y = logical_monitor_pos.y
+            + (logical_monitor_size.height - logical_window_size.height) / 2.5;
+
+        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+    }
+    Ok(())
+}
+
 fn docker_output(args: &[String]) -> Result<DockerCommandResult, String> {
     let status = docker_status_blocking();
     if !status.cli_installed {
@@ -6736,6 +6760,7 @@ pub fn run() {
             cancel_terminal_command,
             cancel_all_terminal_commands,
             hide_main_window,
+            center_main_window,
             execute_python,
             execute_sql,
             brew_status,

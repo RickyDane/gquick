@@ -1,5 +1,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 
 interface MarkdownMessageProps {
   content: string;
@@ -8,7 +11,8 @@ interface MarkdownMessageProps {
 export function MarkdownMessage({ content }: MarkdownMessageProps) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[[rehypeKatex, { strict: false }]]}
       components={{
         p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed break-words">{children}</p>,
         h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 text-zinc-100">{children}</h1>,

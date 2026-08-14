@@ -35,3 +35,19 @@ html, body {
 .tauri-drag-region {
   background-color: transparent !important;
 }
+
+/* KaTeX formatting adjustments */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 8px 0;
+  margin: 0.5em 0 !important;
+}
+
+.katex {
+  font-size: 1.05em;
+}
+
+.katex-error {
+  color: #f87171 !important;
+}

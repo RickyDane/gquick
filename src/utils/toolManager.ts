@@ -196,7 +196,11 @@ export function convertMessagesToOpenAIResponsesInput(messages: Message[]): any[
 }
 
 export function convertMessagesToGemini(messages: Message[]): any[] {
-  return messages.map((m) => {
+  const result: any[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+
     if (m.role === "tool") {
       let toolName = "unknown";
       for (const msg of messages) {
@@ -208,20 +212,34 @@ export function convertMessagesToGemini(messages: Message[]): any[] {
           }
         }
       }
-      return {
-        role: "function",
-        parts: [
-          {
-            functionResponse: {
-              name: toolName,
-              response: { result: m.content },
-            },
-          },
-        ],
+
+      const functionResponsePart = {
+        functionResponse: {
+          name: toolName,
+          response: { result: m.content },
+        },
       };
+
+      const prev = result[result.length - 1];
+      if (
+        prev &&
+        prev.role === "user" &&
+        Array.isArray(prev.parts) &&
+        prev.parts.length > 0 &&
+        prev.parts.every((p: any) => Boolean(p.functionResponse))
+      ) {
+        prev.parts.push(functionResponsePart);
+      } else {
+        result.push({
+          role: "user",
+          parts: [functionResponsePart],
+        });
+      }
+      continue;
     }
+
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-      return {
+      result.push({
         role: "model",
         parts: m.toolCalls.map((tc) => {
           const part: any = {
@@ -233,9 +251,11 @@ export function convertMessagesToGemini(messages: Message[]): any[] {
           }
           return part;
         }),
-      };
+      });
+      continue;
     }
-    return {
+
+    result.push({
       role: m.role === "assistant" ? "model" : "user",
       parts: [
         { text: m.content },
@@ -243,8 +263,10 @@ export function convertMessagesToGemini(messages: Message[]): any[] {
           inlineData: { mimeType: img.mimeType, data: img.base64 },
         })) || []),
       ],
-    };
-  });
+    });
+  }
+
+  return result;
 }
 
 export function convertMessagesToAnthropic(messages: Message[]): any[] {

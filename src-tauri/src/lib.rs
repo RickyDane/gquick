@@ -783,6 +783,12 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+
+/// Set while the window opened at startup (Linux) is shown. It stays open on
+/// focus loss (e.g. a window manager taking focus while starting) until the
+/// user dismisses it; after that, the normal hide-on-blur behavior applies.
+static STARTUP_WINDOW_PINNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 
@@ -3409,6 +3415,7 @@ fn restore_previous_focus<R: Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 fn hide_window<R: Runtime>(window: &tauri::Window<R>, restore_focus: bool) -> Result<(), String> {
+    STARTUP_WINDOW_PINNED.store(false, std::sync::atomic::Ordering::Relaxed);
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
@@ -5685,6 +5692,7 @@ fn capture_region(
     // Block briefly to allow the compositor to fully hide our transparent
     // window before capturing. Windows DWM needs a bit more time.
     let _ = window.hide();
+    STARTUP_WINDOW_PINNED.store(false, std::sync::atomic::Ordering::Relaxed);
     #[cfg(target_os = "windows")]
     std::thread::sleep(std::time::Duration::from_millis(300));
     #[cfg(not(target_os = "windows"))]
@@ -6423,6 +6431,7 @@ fn toggle_window<R: Runtime>(app: &tauri::AppHandle<R>) {
             {
                 let _ = window.hide();
             }
+            STARTUP_WINDOW_PINNED.store(false, std::sync::atomic::Ordering::Relaxed);
             let _ = window.emit("window-hidden", ());
             restore_previous_focus(app);
         } else {
@@ -6691,7 +6700,10 @@ pub fn run() {
             // On Linux, launching from the app menu should open the launcher right away;
             // tray icons and global shortcuts are not available on every desktop.
             #[cfg(target_os = "linux")]
-            show_main_window(app.handle());
+            {
+                STARTUP_WINDOW_PINNED.store(true, std::sync::atomic::Ordering::Relaxed);
+                show_main_window(app.handle());
+            }
 
             Ok(())
         })
@@ -6713,6 +6725,8 @@ pub fn run() {
                 if window.label() == "selector" {
                     // Selector has explicit close paths (Esc, success, error close).
                     // Focus can move during screen capture/AI OCR, so keep it alive.
+                } else if STARTUP_WINDOW_PINNED.load(std::sync::atomic::Ordering::Relaxed) {
+                    // Window opened at startup stays until the user dismisses it.
                 } else {
                     // Check if a dialog is open - don't hide window in that case
                     let app_handle = window.app_handle();

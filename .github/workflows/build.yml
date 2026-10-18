@@ -346,11 +346,12 @@ jobs:
           (cd "$work" && "$image" --appimage-extract >/dev/null)
           appdir="$work/squashfs-root"
 
+          chmod -R u+rwX,go+rX "$appdir"
           icon="$(sed -n 's/^Icon=//p' "$appdir"/*.desktop | head -n 1)"
-          if [ -e "$appdir/$icon.png" ]; then
-            target="$icon.png"
-          else
-            target="$(cd "$appdir" && ls *.png | head -n 1)"
+          # Use the largest hicolor PNG for the icon (root-level icons may be 32x32).
+          target="$(cd "$appdir" && ls -S usr/share/icons/hicolor/*/apps/"$icon".png 2>/dev/null | head -n 1 || true)"
+          if [ -z "$target" ]; then
+            target="$(cd "$appdir" && ls -S *.png | head -n 1)"
           fi
           rm -f "$appdir/.DirIcon"
           ln -s "$target" "$appdir/.DirIcon"

@@ -6590,7 +6590,7 @@ pub fn run() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_i, &settings_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -6605,7 +6605,11 @@ pub fn run() {
                     }
                     _ => {}
                 })
-                .build(app)?;
+                .build(app);
+            // A missing tray (e.g. no StatusNotifier host on Linux) must not stop the app.
+            if let Err(e) = tray {
+                eprintln!("Failed to create tray icon: {}", e);
+            }
 
             // Initialize shortcut state with default
             #[cfg(target_os = "windows")]
@@ -6615,7 +6619,10 @@ pub fn run() {
 
             let default_shortcut_parsed = parse_shortcut(&default_shortcut)
                 .map_err(|e| format!("Failed to parse default shortcut: {}", e))?;
-            app.global_shortcut().register(default_shortcut_parsed)?;
+            // Global shortcuts can be unavailable (e.g. Wayland); keep running without them.
+            if let Err(e) = app.global_shortcut().register(default_shortcut_parsed) {
+                eprintln!("Failed to register main shortcut: {}", e);
+            }
 
             app.manage(ShortcutState {
                 main_shortcut: Mutex::new(default_shortcut),
@@ -6671,11 +6678,20 @@ pub fn run() {
 
             let screenshot_shortcut = parse_shortcut("Alt+S")
                 .map_err(|e| format!("Failed to parse screenshot shortcut: {}", e))?;
-            app.global_shortcut().register(screenshot_shortcut)?;
+            if let Err(e) = app.global_shortcut().register(screenshot_shortcut) {
+                eprintln!("Failed to register screenshot shortcut: {}", e);
+            }
 
             let ocr_shortcut = parse_shortcut("Alt+O")
                 .map_err(|e| format!("Failed to parse OCR shortcut: {}", e))?;
-            app.global_shortcut().register(ocr_shortcut)?;
+            if let Err(e) = app.global_shortcut().register(ocr_shortcut) {
+                eprintln!("Failed to register OCR shortcut: {}", e);
+            }
+
+            // On Linux, launching from the app menu should open the launcher right away;
+            // tray icons and global shortcuts are not available on every desktop.
+            #[cfg(target_os = "linux")]
+            show_main_window(app.handle());
 
             Ok(())
         })

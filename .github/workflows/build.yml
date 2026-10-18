@@ -322,12 +322,15 @@ jobs:
       # Tauri's AppImage bundler writes .DirIcon as an absolute symlink into the
       # CI build directory, so it dangles once the AppImage is mounted elsewhere
       # (AppImageHub's appdir-lint reports ".DirIcon is missing"). Replace it with
-      # a relative symlink, repack, and re-sign the updater signature.
+      # a relative symlink and repack with pinned, checksum-verified tools.
+      # No signing secrets are exposed to this step.
       - name: Fix AppImage .DirIcon
         if: matrix.os_name == 'linux'
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+          APPIMAGE_RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -339,8 +342,10 @@ jobs:
           image="$(realpath "${images[0]}")"
 
           work="$(mktemp -d)"
-          curl -fsSL -o "$work/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$work/appimagetool" "$APPIMAGETOOL_URL"
+          curl -fsSL -o "$work/runtime" "$APPIMAGE_RUNTIME_URL"
+          echo "$APPIMAGETOOL_SHA256  $work/appimagetool" | sha256sum -c -
+          echo "$APPIMAGE_RUNTIME_SHA256  $work/runtime" | sha256sum -c -
           chmod +x "$work/appimagetool" "$image"
 
           (cd "$work" && "$image" --appimage-extract >/dev/null)
@@ -358,13 +363,25 @@ jobs:
           test -s "$appdir/.DirIcon"
           echo ".DirIcon -> $target"
 
-          ARCH=x86_64 "$work/appimagetool" --appimage-extract-and-run --no-appstream "$appdir" "$image"
+          ARCH=x86_64 "$work/appimagetool" --appimage-extract-and-run --no-appstream \
+            --runtime-file "$work/runtime" "$appdir" "$image"
+          rm -f "$image.sig"
 
-          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            rm -f "$image.sig"
-            npm run tauri -- signer sign "$image"
-            test -s "$image.sig"
+      # The repacked AppImage needs a fresh updater signature.
+      - name: Re-sign repacked AppImage
+        if: matrix.os_name == 'linux'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "No updater signing key; skipping."
+            exit 0
           fi
+          image="$(realpath src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage)"
+          npm run tauri -- signer sign "$image"
+          test -s "$image.sig"
 
       - name: Build Tauri app and DMG
         if: matrix.os_name == 'macos-arm'

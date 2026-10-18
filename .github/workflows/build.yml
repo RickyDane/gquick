@@ -319,6 +319,52 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # Tauri's AppImage bundler writes .DirIcon as an absolute symlink into the
+      # CI build directory, so it dangles once the AppImage is mounted elsewhere
+      # (AppImageHub's appdir-lint reports ".DirIcon is missing"). Replace it with
+      # a relative symlink, repack, and re-sign the updater signature.
+      - name: Fix AppImage .DirIcon
+        if: matrix.os_name == 'linux'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage)
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one AppImage, found ${#images[@]}"
+            exit 1
+          fi
+          image="$(realpath "${images[0]}")"
+
+          work="$(mktemp -d)"
+          curl -fsSL -o "$work/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$work/appimagetool" "$image"
+
+          (cd "$work" && "$image" --appimage-extract >/dev/null)
+          appdir="$work/squashfs-root"
+
+          icon="$(sed -n 's/^Icon=//p' "$appdir"/*.desktop | head -n 1)"
+          if [ -e "$appdir/$icon.png" ]; then
+            target="$icon.png"
+          else
+            target="$(cd "$appdir" && ls *.png | head -n 1)"
+          fi
+          rm -f "$appdir/.DirIcon"
+          ln -s "$target" "$appdir/.DirIcon"
+          test -s "$appdir/.DirIcon"
+          echo ".DirIcon -> $target"
+
+          ARCH=x86_64 "$work/appimagetool" --appimage-extract-and-run --no-appstream "$appdir" "$image"
+
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            rm -f "$image.sig"
+            npm run tauri -- signer sign "$image"
+            test -s "$image.sig"
+          fi
+
       - name: Build Tauri app and DMG
         if: matrix.os_name == 'macos-arm'
         run: npm run tauri -- build --target ${{ matrix.target }} --bundles app,dmg

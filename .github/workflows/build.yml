@@ -1037,10 +1037,18 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # website/index.html references images/..., which live at the repo root.
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp -R website/. _site/
+          cp -R images _site/images
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment

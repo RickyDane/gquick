@@ -28,13 +28,16 @@ export const appLauncherPlugin: GQuickPlugin = {
 
     return filtered.map((app) => {
       const appNameLower = app.name.toLowerCase();
+      // Apps rank above all file/folder results (recent files: 200,
+      // indexed files: <=115) so they aren't pushed down when file
+      // results arrive asynchronously.
       let score: number | undefined;
       if (appNameLower === queryLower) {
-        score = 120;
+        score = 215;
       } else if (appNameLower.startsWith(queryLower)) {
-        score = 100;
+        score = 210;
       } else if (appNameLower.includes(queryLower)) {
-        score = 50;
+        score = 205;
       }
 
       return {
